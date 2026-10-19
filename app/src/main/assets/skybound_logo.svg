@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <clipPath id="tile"><rect width="512" height="512" rx="116"/></clipPath>
+    <clipPath id="ball"><circle cx="256" cy="210" r="120"/></clipPath>
+    <clipPath id="slices">
+      <rect x="100" y="80" width="312" height="150"/>
+      <rect x="100" y="240" width="312" height="26"/>
+      <rect x="100" y="278" width="312" height="20"/>
+      <rect x="100" y="311" width="312" height="14"/>
+      <rect x="100" y="339" width="312" height="8"/>
+    </clipPath>
+    <g id="sphere">
+      <g clip-path="url(#slices)">
+        <circle cx="256" cy="210" r="120" fill="#FFB98A"/>
+        <g clip-path="url(#ball)"><circle cx="238" cy="190" r="120" fill="#FFF1D6"/></g>
+      </g>
+    </g>
+    <g id="sphere-ink"><g clip-path="url(#slices)"><circle cx="256" cy="210" r="120" fill="#17110D"/></g></g>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="512" height="512" fill="#FF5A1F"/>
+    <g transform="translate(-20.48 -16.8) scale(1.08)">
+      <circle cx="256" cy="210" r="176" fill="none" stroke="#17110D" stroke-opacity=".14" stroke-width="3"/>
+      <g transform="rotate(-12 256 210)">
+        <use href="#sphere-ink" transform="translate(14 16)"/>
+        <use href="#sphere"/>
+      </g>
+      <path d="M388 96 Q392 124 420 128 Q392 132 388 160 Q384 132 356 128 Q384 124 388 96Z" fill="#FFF1D6"/>
+      <path d="M122 322 Q124 336 138 338 Q124 340 122 354 Q120 340 106 338 Q120 336 122 322Z" fill="#17110D"/>
+      <rect x="150" y="414" width="212" height="22" rx="11" fill="#17110D"/>
+    </g>
+  </g>
+</svg>

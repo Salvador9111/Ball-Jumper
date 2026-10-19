@@ -1,0 +1,45 @@
+# Android Studio and local machine state
+.idea/
+*.iml
+local.properties
+
+# Gradle, Kotlin, Android, and build outputs
+.gradle/
+.gradle-user/
+.android-local/
+.kotlin/
+**/build/
+.tools/
+
+# Signing material and private local credentials
+keystore.properties
+*.jks
+*.keystore
+
+# Firebase files tied to a real project. Commit only the provided templates.
+**/google-services.json
+firebase.properties
+.firebaserc
+
+# Generated packages and export folders
+*.apk
+*.aab
+*.apks
+*.idsig
+exports/
+releases/
+release-output/
+release*
+
+# Generated test binaries and local recovery material
+*.class
+recovery/
+
+# Local visual-check screenshots kept outside app assets
+/*.png
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.log
+

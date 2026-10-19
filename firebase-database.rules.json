@@ -1,0 +1,32 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "matchmaking": {
+      "$mode": {
+        ".read": "auth != null && ($mode === 'endless' || $mode === 'time_trial')",
+        ".write": "auth != null && ($mode === 'endless' || $mode === 'time_trial') && ((!newData.exists() && (data.child('hostUid').val() === auth.uid || data.child('claimUid').val() === auth.uid)) || (!data.exists() && newData.child('hostUid').val() === auth.uid && newData.child('state').val() === 'waiting') || (data.child('hostUid').val() === auth.uid && newData.child('hostUid').val() === auth.uid) || (data.child('state').val() === 'waiting' && newData.child('state').val() === 'claimed' && newData.child('hostUid').val() === data.child('hostUid').val() && newData.child('claimUid').val() === auth.uid) || (data.child('createdAt').isNumber() && data.child('createdAt').val() < now - 45000 && newData.child('hostUid').val() === auth.uid && newData.child('state').val() === 'waiting'))",
+        ".validate": "!newData.exists() || (newData.hasChildren(['hostUid', 'state', 'createdAt']) && newData.child('hostUid').isString() && newData.child('createdAt').isNumber() && (newData.child('state').val() === 'waiting' || (newData.child('state').val() === 'claimed' && newData.child('claimUid').isString() && newData.child('matchId').isString())))"
+      }
+    },
+    "matches": {
+      "$matchId": {
+        ".read": "auth != null && (data.child('meta/hostUid').val() === auth.uid || data.child('meta/guestUid').val() === auth.uid || newData.child('meta/hostUid').val() === auth.uid || newData.child('meta/guestUid').val() === auth.uid)",
+        ".write": "auth != null && !newData.exists() && (data.child('meta/hostUid').val() === auth.uid || data.child('meta/guestUid').val() === auth.uid)",
+        "meta": {
+          ".write": "auth != null && !data.exists() && newData.child('guestUid').val() === auth.uid",
+          ".validate": "newData.hasChildren(['hostUid', 'guestUid', 'mode', 'seed', 'createdAt']) && newData.child('hostUid').isString() && newData.child('guestUid').isString() && newData.child('hostUid').val() !== newData.child('guestUid').val() && (newData.child('mode').val() === 'endless' || newData.child('mode').val() === 'time_trial') && newData.child('seed').isNumber() && newData.child('createdAt').isNumber()"
+        },
+        "players": {
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid && (root.child('matches').child($matchId).child('meta/hostUid').val() === auth.uid || root.child('matches').child($matchId).child('meta/guestUid').val() === auth.uid)",
+            ".validate": "!newData.exists() || (newData.hasChildren(['x', 'y', 'z', 'score', 'landings', 'dead', 'skin', 'updatedAt']) && newData.child('x').isNumber() && newData.child('y').isNumber() && newData.child('z').isNumber() && newData.child('score').isNumber() && newData.child('score').val() >= 0 && newData.child('landings').isNumber() && newData.child('landings').val() >= 0 && newData.child('dead').isBoolean() && newData.child('skin').isNumber() && newData.child('skin').val() >= 0 && newData.child('skin').val() <= 23 && newData.child('updatedAt').isNumber())"
+          }
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    }
+  }
+}

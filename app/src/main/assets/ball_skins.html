@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ball Skins</title>
+
+<style>
+@font-face{font-family:"Cormorant Garamond";src:url("fonts/CormorantGaramond.ttf")} @font-face{font-family:Manrope;src:url("fonts/Manrope.ttf")}
+:root{--bg:#0e0c0a;--panel:#171411;--panel2:#1f1b17;--tx:#f3ece1;--mut:#9c9286;--line:#2c2620;--glow:#9a9690;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg:#f1ebe1;--panel:#fbf7f0;--panel2:#efe7da;--tx:#1d1712;--mut:#7a6e60;--line:#ddd2c1}}
+:root[data-theme="light"]{--bg:#f1ebe1;--panel:#fbf7f0;--panel2:#efe7da;--tx:#1d1712;--mut:#7a6e60;--line:#ddd2c1}
+:root[data-theme="dark"]{--bg:#0e0c0a;--panel:#171411;--panel2:#1f1b17;--tx:#f3ece1;--mut:#9c9286;--line:#2c2620}
+*{box-sizing:border-box;margin:0}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{background:var(--bg);color:var(--tx);font-family:Manrope,system-ui,sans-serif;min-height:100%;display:flex;justify-content:center}
+.app{width:100%;max-width:440px;padding:14px 16px 28px;position:relative}
+.app::before{content:"";position:absolute;inset:0 0 auto 0;height:460px;background:radial-gradient(60% 55% at 50% 36%,color-mix(in srgb,var(--glow) 14%,transparent),transparent 72%);pointer-events:none;transition:.6s}
+.top{display:flex;align-items:center;justify-content:space-between;position:relative}
+.back{width:38px;height:38px;border:0;background:transparent;color:var(--tx);display:grid;place-items:center;cursor:pointer}
+button{-webkit-tap-highlight-color:transparent}button:focus:not(:focus-visible){outline:none}button:focus-visible{outline:1px solid #e4b769;outline-offset:3px}
+h1{font-family:'Cormorant Garamond',Georgia,serif;font-size:26px;font-weight:600;letter-spacing:.04em}
+.coins{display:flex;gap:7px;align-items:center;font-weight:700;font-size:14px}
+.coin{width:15px;height:15px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff2b8,#e3a92c 55%,#8a5a06);box-shadow:0 0 0 1.5px #6f4805 inset}
+.stage{position:relative;height:250px;display:grid;place-items:center;margin-top:4px}.stage::before{content:"";position:absolute;top:-8px;left:50%;width:250px;height:100%;transform:translateX(-50%);clip-path:polygon(42% 0,58% 0,100% 100%,0 100%);background:linear-gradient(180deg,color-mix(in srgb,#fff 15%,transparent),color-mix(in srgb,var(--glow) 8%,transparent) 70%,transparent);pointer-events:none}
+.plinth{position:absolute;bottom:14px;width:200px;height:40px;border-radius:50%;background:radial-gradient(ellipse at 50% 50%,color-mix(in srgb,var(--glow) 38%,transparent),color-mix(in srgb,#fff 6%,transparent) 45%,transparent 72%);transition:.6s}
+.plinth::after{content:none}
+.jump{position:absolute;bottom:32px;animation:hop 4s ease-in-out infinite}.jump::before{content:"";position:absolute;inset:-35%;z-index:-1;background:radial-gradient(circle,color-mix(in srgb,var(--glow) 24%,transparent),transparent 64%)}
+@keyframes hop{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+.sh{position:absolute;bottom:26px;width:84px;height:11px;border-radius:50%;background:rgba(0,0,0,.6);filter:blur(6px);animation:shd 4s ease-in-out infinite}
+@keyframes shd{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(.88);opacity:.6}}
+@keyframes sweep{0%{transform:translateX(-90%)}55%,100%{transform:translateX(90%)}}
+.info{text-align:center;position:relative;margin-top:2px}
+.badge{font-size:10px;font-weight:700;letter-spacing:.28em;text-transform:uppercase;color:var(--glow)}
+.name{font-family:'Cormorant Garamond',Georgia,serif;font-size:40px;font-weight:600;line-height:1.1;margin:6px 0 4px}
+.desc{color:var(--mut);font-size:13px}
+.cta{margin:20px auto 0;display:flex;gap:8px;justify-content:center;align-items:center;width:100%;height:50px;border-radius:99px;border:0;font:700 13px Manrope,sans-serif;letter-spacing:.14em;cursor:pointer;color:var(--bg);background:var(--tx)}
+.cta.on{background:transparent;color:var(--mut);border:1px solid var(--line);cursor:default}
+.cta.no{background:transparent;color:var(--mut);border:1px dashed var(--line);cursor:default}
+.prog{display:flex;justify-content:space-between;align-items:baseline;margin:24px 2px 10px;font-size:12px;color:var(--mut)}
+.prog b{color:var(--tx);font-family:'Cormorant Garamond',serif;font-size:20px}
+.tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
+.tab{flex:none;padding:8px 2px;margin-right:16px;border:0;border-bottom:1.5px solid transparent;background:transparent;color:var(--mut);font:600 12px Manrope,sans-serif;cursor:pointer;display:flex;gap:6px;align-items:center}
+.tab i{width:7px;height:7px;border-radius:50%;background:var(--c,var(--mut))}
+.tab.a{color:var(--tx);border-bottom-color:var(--tx)}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:12px}
+.card{--c:#9a9690;position:relative;border-radius:18px;padding:14px 4px 10px;background:var(--panel);border:1px solid transparent;text-align:center;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:8px;transition:.25s}
+.card::after{content:"";position:absolute;top:10px;left:10px;width:6px;height:6px;border-radius:50%;background:var(--c)}
+.card.s{border-color:var(--tx);background:var(--panel2)}
+.card.leg{background:var(--panel)}
+.cn{font-size:10.5px;font-weight:700}
+.cp{font-size:10.5px;color:var(--mut);display:flex;gap:4px;align-items:center;height:14px;font-weight:600}
+.cp .coin{width:11px;height:11px}
+.eq{position:absolute;top:8px;right:8px;width:14px;height:14px;border-radius:50%;background:var(--tx);display:grid;place-items:center}.eq svg{stroke:var(--bg)}
+.lock{position:absolute;top:8px;right:8px;color:var(--mut)}
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translate(-50%,30px);opacity:0;background:var(--tx);color:var(--bg);padding:10px 16px;border-radius:12px;font-weight:700;font-size:13px;transition:.3s;pointer-events:none}
+.toast.on{transform:translate(-50%,0);opacity:1}
+@media(prefers-reduced-motion:reduce){.ball,.jump,.sh,.ball.leg::before{animation:none}}
+#cv{width:156px;height:156px;touch-action:none;cursor:grab;display:block}
+.hint{position:absolute;bottom:4px;font-size:10px;letter-spacing:.26em;text-transform:uppercase;color:var(--mut);transition:.4s}
+.tb{width:46px;height:46px;filter:drop-shadow(0 8px 6px rgba(0,0,0,.35))}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <button class="back" aria-label="Back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <h1>Ball Skins</h1>
+    <div class="coins"><span class="coin"></span><span id="coins">0</span></div>
+  </div>
+  <div class="stage"><div class="plinth"></div><div class="sh"></div><div class="jump"><canvas id="cv" width="160" height="160"></canvas></div><div class="hint" id="hint">Drag to rotate</div></div>
+  <div class="info">
+    <span class="badge" id="badge"></span>
+    <div class="name" id="name"></div>
+    <div class="desc" id="desc"></div>
+    <button class="cta" id="cta"></button>
+  </div>
+  <div class="prog"><span>Collection</span><span><b id="own">0</b> / <span id="tot"></span></span></div>
+  <div class="tabs" id="tabs"></div>
+  <div class="grid" id="grid"></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const R={common:{n:'Common',c:'#9a9690',p:200},rare:{n:'Rare',c:'#3fbf8a',p:600},epic:{n:'Epic',c:'#e0445a',p:1500},legendary:{n:'Legendary',c:'#f2b84b',p:4000}};
+const S=[
+['graphite','Graphite','common','Cold-pressed carbon rubber.','stripes',6,'#403d3a','#57534f','#57534f',0,0],
+['terracotta','Terracotta','common','Hand-fired clay, bold striping.','stripes',5,'#b5623f','#86401f','#86401f',0,0],
+['sandstone','Sandstone','common','Desert grit with a soft speckle.','dots',9,'#cdb48a','#a5875a','#a5875a',0,0],
+['olive','Olive','common','Matte field green, diagonal weave.','diag',6,'#5d6b3a','#7f9050','#7f9050',0,0],
+['ash','Ash','common','Soft volcanic dust.','dots',16,'#8d8a85','#66635f','#66635f',0,0],
+['walnut','Walnut','common','Oiled walnut with fine-cut grain.','bands',7,'#493020','#b58154','#d6aa77',.15,0],
+['jade','Jade','rare','Polished green stone, cut with light.','veins',3,'#1f7a5a','#9be8c0','#0c4030',.25,0],
+['copper','Copper','rare','Brushed metal with a warm sheen.','bands',3,'#6f3614','#f2b988','#f2b988',.9,0],
+['pearl','Pearl','rare','Iridescent shell, blush to mint.','iri',2,'#ece6dc','#ffb4a0','#a6efd0',.35,0],
+['quartz','Rose Quartz','rare','Veined pink stone, softly lit.','veins',4,'#e6b3b0','#fff3f0','#a4505f',.2,0],
+['citrine','Citrine','rare','Amber crystal, cut in planes.','facets',8,'#8a5a0c','#f0b73c','#ffe9a0',.6,0],
+['bronze','Bronze','rare','Burnished bronze with a satin finish.','bands',5,'#694324','#d9a765','#edd1a4',.8,0],
+['ruby','Ruby','epic','A single flawless, faceted gem.','facets',8,'#6f0b1d','#d1213f','#ff8a9c',.7,0],
+['ember','Ember','epic','Cooled basalt, still cracked with fire.','cracks',3,'#1b1311','#ff7a1a','#ffd36b',0,1],
+['carbon','Carbon Crimson','epic','Woven fibre with a razor red line.','weave',16,'#131211','#2b2928','#d3243f',.5,0],
+['rosegold','Rose Gold','epic','Mirror-brushed, warm and rare.','bands',3,'#8f4d44','#f8d3c3','#f8d3c3',.95,0],
+['viridian','Viridian Scale','epic','Deep-sea green, hand-set scales.','scales',10,'#0a3a2d','#5fd39a','#072a20',.35,0],
+['obsidian','Obsidian','epic','Polished volcanic glass with silver seams.','veins',4,'#151412','#b5aa99','#554b40',.8,0],
+['solar','Solar Gold','legendary','Cast in 24-karat sunlight.','bands',4,'#b26d05','#fff1b8','#fff1b8',1,0],
+['molten','Molten Core','legendary','A living heart of liquid fire.','lava',1,'#240b05','#ff7a1a','#ffe08a',0,1],
+['eclipse','Eclipse','legendary','Black glass crowned in gold.','rings',1,'#0a0908','#f2b84b','#f2b84b',.8,.7],
+['platinum','Platinum','legendary','Liquid chrome, flawless finish.','bands',5,'#5f6266','#ffffff','#ffffff',1,0],
+['sovereign','Sovereign','legendary','Ivory enamel bound in fine gold.','rings',1,'#ded3b8','#d9a02d','#ffe3a0',.65,0],
+['phoenix','Phoenix','legendary','Feathered flame, forever rising.','flow',3,'#6d0d04','#ff7a1a','#ffd36b',.5,.5]
+].map(a=>({id:a[0],name:a[1],r:a[2],desc:a[3],type:a[4],n:a[5],base:a[6],acc:a[7],acc2:a[8],metal:a[9],emis:a[10]}));
+/* real-time 3D sphere renderer */
+const sm=(a,b,x)=>{x=Math.min(1,Math.max(0,(x-a)/(b-a)));return x*x*(3-2*x)},fr=x=>x-Math.floor(x),hx=h=>[1,3,5].map(i=>parseInt(h.substr(i,2),16));
+const PT={
+stripes:(u,v,n)=>[1-sm(.28,.36,Math.abs(fr(u*n)-.5)*2),0],
+dots:(u,v,n)=>[1-sm(.16,.24,Math.hypot(fr(u*n*2)-.5,fr(v*n)-.5)),0],
+diag:(u,v,n)=>[1-sm(.24,.3,fr(u*n+v*n*.7)),0],
+veins:(u,v,n)=>[1-sm(0,.12,Math.abs(Math.sin(u*6.283*n+2.5*Math.sin(v*9+u*12.566)))),.7*(1-sm(0,.08,Math.abs(Math.sin(v*6.283*n*1.5+3*Math.sin(u*18.85)))))],
+bands:(u,v,n)=>[.5+.5*Math.sin(u*6.283*n+v*3),0],
+iri:(u,v,n)=>[.7*(.5+.5*Math.sin(u*6.283*n+v*5)),.7*(.5+.5*Math.sin(u*12.566*n+v*4+2))],
+facets:(u,v,n)=>{const h=fr(Math.sin(Math.floor(u*n*2)*12.9+Math.floor(v*n)*78.2)*43758.5);return[h,h>.8?1:0]},
+cracks:(u,v,n)=>{const c=1-sm(.02,.09,Math.abs(Math.sin(u*6.283*n+2.2*Math.sin(v*7+u*12.566))));return[c,c>.8?1:0]},
+weave:(u,v,n)=>[(Math.floor(u*n*2)+Math.floor(v*n))&1,sm(.46,.49,Math.abs(fr(u*2)-.5))],
+scales:(u,v,n)=>{const iv=Math.floor(v*n),d=Math.hypot(fr(u*n*2+(iv&1)*.5)-.5,fr(v*n)-1);return[sm(.3,.7,d),1-sm(.02,.06,Math.abs(d-.5))]},
+lava:(u,v)=>{const f=Math.sin(u*18.85+Math.sin(v*5)*2)+Math.sin(v*8+u*12.566)+Math.sin(u*31.4-v*4);return[sm(.4,1.4,f),sm(1.4,2.4,f)]},
+rings:(u,v)=>{const q=fr(u*2),d=Math.min(q,1-q);return[Math.max(1-sm(.004,.02,Math.abs(v-.5)),1-sm(.005,.025,d),.6*(1-sm(.003,.012,Math.abs(v-.32)))),0]},
+flow:(u,v,n)=>[.5+.5*Math.sin(u*6.283*n+Math.sin(v*9)*1.5),sm(.6,1,.5+.5*Math.sin(u*12.566*n-v*7))]
+};
+const cache={};
+function mk(N){const R=N/2,o={i:[],x:[],y:[],z:[],d:[],a:[],s1:[],s2:[],r:[],e:[],o:[],b:[]},L=[-.45,.65,.62],l=Math.hypot(...L),V=L.map(q=>q/l),H=[V[0],V[1],V[2]+1],h=Math.hypot(...H);
+for(let py=0;py<N;py++)for(let px=0;px<N;px++){const x=(px+.5)/R-1,y=1-(py+.5)/R,d2=x*x+y*y,al=Math.min(1,(1-Math.sqrt(d2))*R*.8+.5);if(al<=0)continue;
+const z=Math.sqrt(Math.max(0,1-d2)),sp=Math.max(0,(x*H[0]+y*H[1]+z*H[2])/h),rx=2*z*x,ry=2*z*y;
+o.i.push((py*N+px)*4);o.x.push(x);o.y.push(y);o.z.push(z);o.a.push(al);
+o.d.push(Math.max(0,x*V[0]+y*V[1]+z*V[2]));o.s1.push(Math.pow(sp,18));o.s2.push(Math.pow(sp,200));o.r.push(Math.pow(1-z,3)*(.5+1.1*Math.max(0,x)));o.o.push(.55+.45*Math.sqrt(z));o.b.push(Math.max(0,-y)*Math.max(0,.2-y)*.9*(.4+.6*(1-z)));
+o.e.push(Math.min(1.6,.18+.5*sm(-.3,.9,ry)+1.5*sm(-.9,-.72,rx)*(1-sm(-.35,-.2,rx))*sm(.15,.3,ry)*(1-sm(.7,.85,ry))+.25*sm(.5,1,rx)*sm(-.2,.4,ry)))}
+return o}
+function draw(cv,s,yaw,pit){const N=cv.width,o=cache[N]||(cache[N]=mk(N)),g=cv.getContext('2d'),im=cv._m||(cv._m=g.createImageData(N,N)),D=im.data;
+if(!s.C)s.C=[s.base,s.acc,s.acc2].map(hx);const[B,A,A2]=s.C,m=s.metal,em=s.emis,f=PT[s.type],ca=Math.cos(yaw),sa=Math.sin(yaw),cb=Math.cos(pit),sb=Math.sin(pit);
+for(let k=0;k<o.i.length;k++){const x=o.x[k],y=o.y[k],z=o.z[k],y1=y*cb+z*sb,z1=-y*sb+z*cb,x2=x*ca-z1*sa,z2=x*sa+z1*ca,
+u=Math.atan2(x2,z2)/6.28318+.5,v=Math.acos(Math.max(-1,Math.min(1,y1)))/Math.PI,[t1,t2]=f(u,v,s.n),
+df=(.14+o.d[k]*.75+.25*o.d[k]*o.d[k])*o.o[k],sp=o.s1[k]*(1-m)*.28+o.s2[k]*(.55+.6*m),rm=o.r[k]*.2,en=(.25+o.e[k]*.85)*o.o[k],bn=o.b[k],i=o.i[k];
+for(let c=0;c<3;c++){let col=B[c]*(1-t1)+A[c]*t1;col=col*(1-t2)+A2[c]*t2;const r=col*(df*(1-m)+en*m)+col*bn*.6+255*sp+255*rm*1.4+A[c]*t1*em*1.1;D[i+c]=r>255?255:r}
+D[i+3]=o.a[k]*255}
+g.putImageData(im,0,0)}
+const $=id=>document.getElementById(id);
+const saved=JSON.parse(NativeSkins.snapshot());
+S.forEach((s,i)=>{const c=document.createElement('canvas');c.width=c.height=72;draw(c,s,.7,.2);s.img=c.toDataURL();s.price=saved.prices[i]});
+let st={coins:saved.coins,own:new Set(saved.owned.map(i=>S[i].id)),eq:S[saved.selected].id,sel:S[saved.selected].id,f:'all'};
+const coin='<span class="coin"></span>';
+function stage(){
+  const s=S.find(x=>x.id===st.sel),r=R[s.r],o=st.own.has(s.id);
+  document.documentElement.style.setProperty('--glow',r.c);
+  vel=saved.reduceMotion?0:.022;
+  $('badge').textContent=r.n;$('name').textContent=s.name;$('desc').textContent=s.desc;
+  const b=$('cta');b.className='cta';
+  if(o&&st.eq===s.id){b.classList.add('on');b.textContent='EQUIPPED';}
+  else if(o){b.textContent='EQUIP';}
+  else if(st.coins>=s.price){b.innerHTML=coin+' BUY  ·  '+s.price.toLocaleString();}
+  else{b.classList.add('no');b.innerHTML=coin+' '+s.price.toLocaleString()+' · NOT ENOUGH COINS';}
+}
+function tabs(){
+  const k=['all',...Object.keys(R)];
+  $('tabs').innerHTML=k.map(x=>`<button class="tab ${st.f===x?'a':''}" data-f="${x}" ${x!=='all'?`style="--c:${R[x].c}"`:''}>${x!=='all'?'<i></i>':''}${x==='all'?'All':R[x].n}</button>`).join('');
+}
+function grid(){
+  $('grid').innerHTML=S.filter(s=>st.f==='all'||s.r===st.f).map(s=>{
+    const o=st.own.has(s.id),e=st.eq===s.id;
+    return `<div class="card ${s.r==='legendary'?'leg':''} ${st.sel===s.id?'s':''} ${o?'':'lk'}" data-id="${s.id}" style="--c:${R[s.r].c}">
+      ${e?'<span class="eq"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="4" stroke-linecap="round"><path d="M5 12l5 5 9-10"/></svg></span>':''}
+      ${o?'':'<svg class="lock" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>'}
+      <img class="tb" src="${s.img}" alt=""><div class="cn">${s.name}</div>
+      <div class="cp">${o?(e?'Equipped':'Owned'):coin+s.price.toLocaleString()}</div></div>`}).join('');
+}
+function render(){$('coins').textContent=st.coins.toLocaleString();$('own').textContent=st.own.size;$('tot').textContent=S.length;stage();tabs();grid();}
+function toast(t){const e=$('toast');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),1800);}
+$('grid').onclick=e=>{const c=e.target.closest('.card');if(!c)return;st.sel=c.dataset.id;render();};
+$('tabs').onclick=e=>{const t=e.target.closest('.tab');if(!t)return;st.f=t.dataset.f;tabs();grid();};
+$('cta').onclick=()=>{
+const s=S.find(x=>x.id===st.sel),i=S.indexOf(s);
+const result=JSON.parse(NativeSkins.choose(i));
+if(!result.ok){toast("You don't have enough money to buy this");return;}
+st.coins=result.coins;st.own.add(s.id);st.eq=s.id;render();toast(s.name+' equipped');
+};
+document.querySelector('.back').onclick=()=>NativeSkins.close();
+const cv=$('cv');let yaw=.5,pit=.18,vel=.22,drag=0,lx=0,ly=0;
+const idle=saved.reduceMotion?0:.007;
+cv.onpointerdown=e=>{drag=1;lx=e.clientX;ly=e.clientY;cv.setPointerCapture(e.pointerId);cv.style.cursor='grabbing';$('hint').style.opacity=0};
+cv.onpointermove=e=>{if(!drag)return;vel=(e.clientX-lx)*.012;yaw+=vel;pit+=(e.clientY-ly)*.008;lx=e.clientX;ly=e.clientY};
+cv.onpointerup=cv.onpointercancel=()=>{drag=0;cv.style.cursor='grab'};
+let shopActive=false,framePending=false;
+function frame(){framePending=false;if(!shopActive)return;if(!drag){yaw+=vel;vel+=(idle-vel)*.025}draw(cv,S.find(x=>x.id===st.sel),yaw,pit);framePending=true;requestAnimationFrame(frame)}
+window.openNativeShop=()=>{const fresh=JSON.parse(NativeSkins.snapshot());st.coins=fresh.coins;st.own=new Set(fresh.owned.map(i=>S[i].id));st.eq=S[fresh.selected].id;if(!S.some(s=>s.id===st.sel))st.sel=st.eq;render();shopActive=true;if(!framePending){framePending=true;requestAnimationFrame(frame)}};
+window.closeNativeShop=()=>{shopActive=false};
+setTimeout(()=>S.forEach((s,i)=>NativeSkins.cacheSphere(i,s.img.split(',')[1])),250);
+if(saved.reduceMotion){document.querySelector('.jump').style.animation='none';document.querySelector('.sh').style.animation='none';}
+render();
+</script>
+</body>
+</html>
+
+

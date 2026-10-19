@@ -1,0 +1,2 @@
+# Copy this file to firebase.properties. The real file is ignored by Git.
+databaseUrl=https://YOUR_PROJECT_ID-default-rtdb.YOUR_REGION.firebasedatabase.app

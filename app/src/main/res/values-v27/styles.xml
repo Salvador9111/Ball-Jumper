@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.SkyboundJumper" parent="Theme.SkyboundJumper.Base">
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>
