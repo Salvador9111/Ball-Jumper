@@ -2,7 +2,7 @@
 .idea/
 *.iml
 local.properties
-
+*.env
 # Gradle, Kotlin, Android, and build outputs
 .gradle/
 .gradle-user/
