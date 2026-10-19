@@ -17,6 +17,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppCheckInstaller.install(this)
         gameView = GameView(this)
         root = android.widget.FrameLayout(this)
         scene3D = ClimbSurface3D(this, gameView.world3D)

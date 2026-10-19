@@ -29,7 +29,8 @@ firebase.properties
 exports/
 releases/
 release-output/
-release*
+/release/
+/release-*/
 
 # Generated test binaries and local recovery material
 *.class

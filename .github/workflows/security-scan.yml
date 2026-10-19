@@ -1,0 +1,17 @@
+name: Security scan
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tracked-secret-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject credentials and generated packages
+        shell: pwsh
+        run: ./scripts/check-secrets.ps1

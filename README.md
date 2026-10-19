@@ -18,8 +18,11 @@ The repository builds and opens without Firebase, but online multiplayer stays d
 3. Download the combined `google-services.json` and save it as `app/google-services.json`.
 4. Copy `firebase.properties.example` to `firebase.properties` and replace its database URL.
 5. Optionally copy `.firebaserc.example` to `.firebaserc`, select the project, and deploy the committed rules with `firebase deploy --only database`.
+6. In Firebase App Check, register the release app with Play Integrity. For local debug testing, copy the debug token printed by the app into Firebase Console; never save that token in Git.
 
-The templates document every required field without containing a live key. The committed `firebase-database.rules.json` restricts matchmaking and match data to authenticated players. Restrict the Android API key in Google Cloud Console to the two package names and the SHA-1/SHA-256 fingerprints of the certificates that sign them.
+The templates document every required field without containing a live key. The committed `firebase-database.rules.json` restricts matchmaking and match data to authenticated players. Release builds install the Play Integrity App Check provider, while debug builds use Firebase's debug provider. Enable App Check enforcement only after valid release and debug requests appear in Firebase metrics. Restrict the Android API key in Google Cloud Console to the two package names and the SHA-1/SHA-256 fingerprints of the certificates that sign them.
+
+Run `./scripts/check-secrets.ps1` before committing. GitHub Actions runs the same check on every push and pull request.
 
 ## Build a debug APK
 
