@@ -143,8 +143,85 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private val random = Random()
     private val preferences = context.getSharedPreferences("game_progress", Context.MODE_PRIVATE)
     private val achievementProgress = AchievementProgress(preferences)
+    private val ghostReplay = GhostReplay(context)
+    private var replayRun: GhostReplay.Run? = null
+    private var replayCursor = 0
+    private var runSeed = 0L
+    private var ghostCountdown = 0f
+    private var computerBattle = false
+    private val computerWorld = ClimbWorld3D()
+
+    private fun startGhostBattle() {
+        resetGame(GameMode.ENDLESS)
+        computerBattle = true
+        world3D.ghostRace = true
+        computerWorld.timeTrial = false
+        computerWorld.multiplayerOpening = false
+        computerWorld.reset(runSeed)
+        ghostCountdown = 3f
+        state = State.COUNTDOWN
+        updateGhost()
+    }
+
+    private fun chooseOfflineRun(mode: GameMode) {
+        post {
+            val best = ghostReplay.best(mode.name)
+            android.app.AlertDialog.Builder(context)
+                .setTitle(if (mode == GameMode.ENDLESS) "Endless run" else "Time trial")
+                .setItems(arrayOf("Solo run", if (best == null) "Ghost race · record a solo run first" else "Ghost race · best ${best.score}", "Other players’ ghosts · Coming soon")) { _, which ->
+                    synchronized(this) {
+                        if (which == 0) resetGame(mode)
+                        else if (which == 2) Toast.makeText(context, "Shared replays will unlock with online setup.", Toast.LENGTH_SHORT).show()
+                        else if (best != null) {
+                            resetGame(mode, seed = best.seed)
+                            replayRun = best
+                            world3D.ghostRace = true
+                            ghostCountdown = 3f
+                            state = State.COUNTDOWN
+                            updateGhost()
+                        } else Toast.makeText(context, "Finish a solo run to record your first ghost.", Toast.LENGTH_SHORT).show()
+                    }
+                }.setNegativeButton("Back", null).show()
+        }
+    }
+
+    private fun showOnlineOptions(mode: GameMode) {
+        post {
+            android.app.AlertDialog.Builder(context).setTitle("Online · ${if (mode == GameMode.ENDLESS) "Endless" else "Time trial"}")
+                .setItems(arrayOf("Sign in with Google · Coming soon", "Random opponent · Coming soon",
+                    "Create private room · Coming soon", "Join with room code · Coming soon", "Rematch · Coming soon")) { _, _ ->
+                    android.app.AlertDialog.Builder(context).setTitle("Coming soon")
+                        .setMessage("Online play and friend invitations will unlock when account and multiplayer setup is complete.")
+                        .setPositiveButton("Got it", null).show()
+                }.setNegativeButton("Back", null).show()
+        }
+    }
+
+    private fun updateGhost() {
+        if (computerBattle) {
+            synchronized(world3D) {
+                world3D.ghostVisible = !computerWorld.dead
+                world3D.ghostX = computerWorld.x
+                world3D.ghostY = computerWorld.y
+                world3D.ghostZ = computerWorld.z
+            }
+            return
+        }
+        val samples = replayRun?.samples ?: return
+        val t = world3D.time
+        while (replayCursor + 8 < samples.size && samples[replayCursor + 4] <= t) replayCursor += 4
+        synchronized(world3D) {
+            world3D.ghostVisible = t <= samples[samples.size - 4]
+            val next = (replayCursor + 4).coerceAtMost(samples.size - 4)
+            val fraction = ((t - samples[replayCursor]) / (samples[next] - samples[replayCursor]).coerceAtLeast(.0001f)).coerceIn(0f, 1f)
+            world3D.ghostX = samples[replayCursor + 1] + (samples[next + 1] - samples[replayCursor + 1]) * fraction
+            world3D.ghostY = samples[replayCursor + 2] + (samples[next + 2] - samples[replayCursor + 2]) * fraction
+            world3D.ghostZ = samples[replayCursor + 3] + (samples[next + 3] - samples[replayCursor + 3]) * fraction
+        }
+    }
 
     private fun recordAchievements() {
+        achievementProgress.recordLevel(levelForLifetimeScore(lifetimeScore))
         achievementProgress.record(score, heightScore, runCollectedCoins,
             world3D.landings, world3D.movingLandings, world3D.preciseLandings, (world3D.z * 10f).toInt(),
             if (continueCost == 50) score else 0)
@@ -155,12 +232,21 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         return achievementProgress.snapshot(highScore, ownedSkins.size)
     }
 
+    private var achievementReadyCheckedAt = -2f
+    private var hasAchievementRewards = false
+    private fun refreshAchievementIndicator() {
+        if (elapsed - achievementReadyCheckedAt < 1f) return
+        achievementReadyCheckedAt = elapsed
+        hasAchievementRewards = achievementProgress.snapshot(highScore, ownedSkins.size).any { it.ready }
+    }
+
     @Synchronized fun claimAchievement(id: String): Int {
         val reward = achievementProgress.claim(id, highScore, ownedSkins.size)
         if (reward > 0) {
             walletCoins += reward
             preferences.edit().putInt("wallet_coins", walletCoins)
                 .putBoolean("achievement_claimed_$id", true).apply()
+            achievementReadyCheckedAt = -2f
         }
         return reward
     }
@@ -360,7 +446,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
 
         override fun onMatchReady(session: OnlineMatchCoordinator.Session) = synchronized(this@GameView) {
-            if (state != State.MATCHMAKING) return@synchronized
+            if (state != State.MATCHMAKING && !(isOnlineRun && state == State.GAME_OVER)) return@synchronized
             val mode = if (session.mode == OnlineMatchCoordinator.Mode.TIME_TRIAL)
                 GameMode.TIME_TRIAL else GameMode.ENDLESS
             resetGame(mode, onlineRun = true, seed = session.seed)
@@ -403,6 +489,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             }
 
         override fun onOpponentLeft() = synchronized(this@GameView) {
+            matchmakingStatus = "RIVAL LEFT · RETURN TO MENU"
             if (isOnlineRun && state == State.COUNTDOWN) {
                 onlineCoordinator.leaveRun()
                 isOnlineRun = false
@@ -675,7 +762,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         // environment or platforms while the player is climbing.
         world3D.cosmeticThemeTier = FIXED_MORNING_THEME_TIER
         world3D.trailTier = trailTierForLevel(levelAtRunStart)
-        world3D.reset(seed)
+        runSeed = seed ?: System.nanoTime()
+        replayRun = null; replayCursor = 0; ghostCountdown = 0f; computerBattle = false
+        world3D.ghostRace = false; world3D.ghostVisible = false
+        world3D.reset(runSeed)
+        ghostReplay.reset()
+        ghostReplay.record(0f, world3D.x, world3D.y, world3D.z)
         updateHudLabels()
         addPlatform(worldWidth * 0.5f - 55f * density, startY, 110f * density, PlatformType.STANDARD)
         highestGeneratedY = startY
@@ -701,6 +793,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val now = System.currentTimeMillis()
         if (now - lastMissionClockCheck >= 5_000L) refreshDailyMissions(false)
         if (state == State.COUNTDOWN) {
+            if (replayRun != null || computerBattle) ghostCountdown = (ghostCountdown - dt).coerceAtLeast(0f)
             if (onlineCountdownRemainingMs() <= 0L) {
                 state = State.PLAYING
                 networkPublishAccumulator = 0f
@@ -717,6 +810,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             recoveryTimeRemaining = max(0f, recoveryTimeRemaining - dt)
         }
         world3D.update(dt, inputDirection, sensitivityLevel, recoveryTimeRemaining > 0f)
+        if (computerBattle) computerWorld.update(dt, computerWorld.computerSteering(), 60, false)
+        updateGhost()
         synchronized(world3D) {
             world3D.skinColor = skins[selectedSkin].primary
             world3D.skinAccent = skins[selectedSkin].accent
@@ -762,7 +857,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             }
         }
 
-        if (currentMode == GameMode.TIME_TRIAL && timeTrialRemaining <= 0f) {
+        if (computerBattle && (computerWorld.dead || world3D.dead)) {
+            gameOver(if (world3D.dead && computerWorld.dead) "DRAW · BOTH MISSED" else if (computerWorld.dead) "YOU WIN · AI MISSED" else "AI WINS · TRY AGAIN")
+        } else if (currentMode == GameMode.TIME_TRIAL && timeTrialRemaining <= 0f) {
             gameOver("TIME EXPIRED")
         } else if (world3D.dead) {
             gameOver(if (world3D.hitSpikes) "YOU HIT THE SPIKES" else "YOU MISSED THE LANDING")
@@ -909,12 +1006,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun gameOver(reason: String = "YOU FELL TOO FAR") {
         if (state == State.GAME_OVER) return
+        if(computerBattle && score>preferences.getInt("ghost_battle_best",0))
+            preferences.edit().putInt("ghost_battle_best",score).apply()
         recordAchievements()
         val newLifetimeScore = (score - runLifetimeScoreRecorded).coerceAtLeast(0)
         lifetimeScore += newLifetimeScore.toLong()
         runLifetimeScoreRecorded = score
         val accountLevel = levelForLifetimeScore(lifetimeScore)
         applyLevelRewards(accountLevel)
+        achievementProgress.recordLevel(accountLevel)
         gameOverReason = if (isOnlineRun && remoteSeen && remoteDead) {
             when {
                 score > remoteScore -> "YOU WIN · RIVAL SCORE ${remoteScore}"
@@ -925,7 +1025,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         gameOverWasBest = if (currentMode == GameMode.TIME_TRIAL) score > timeTrialBest else score > highScore
         state = State.GAME_OVER
         gameOverAnimationStartedAtMs = android.os.SystemClock.uptimeMillis()
-        gameOverStartedAtMs = if (currentMode == GameMode.ENDLESS && !isOnlineRun)
+        gameOverStartedAtMs = if (currentMode == GameMode.ENDLESS && !isOnlineRun && !computerBattle)
             android.os.SystemClock.uptimeMillis() else 0L
         if (isOnlineRun) onlineCoordinator.publish(world3D.x, world3D.y, world3D.z, score,
             world3D.landings, true, selectedSkin)
@@ -1107,7 +1207,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
         if (state == State.MODE_SELECT) {
             drawMenuSpace(canvas)
-            drawReferenceModeSelect(canvas)
+            drawMainMenu(canvas)
             return
         }
         if (state == State.MATCHMAKING) {
@@ -1138,6 +1238,22 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             return
         }
         if (state == State.PLAYING && controlMode == 0) drawControls(canvas)
+        if (isOnlineRun && state == State.PLAYING) {
+            textPaint.textAlign=Paint.Align.CENTER
+            textPaint.textSize=11f*density; textPaint.color=Color.WHITE
+            paint.color=Color.argb(210,24,24,24)
+            canvas.drawRect(0f,85f*density,worldWidth,111f*density,paint)
+            canvas.drawText(matchmakingStatus,worldWidth*.5f,103f*density,textPaint)
+            textPaint.textAlign=Paint.Align.LEFT
+        }
+        if ((replayRun != null || computerBattle) && state == State.PLAYING && world3D.time < 4f) {
+            paint.color = Color.argb(220, 25, 25, 25)
+            canvas.drawRect(worldWidth * .12f, 90f * density, worldWidth * .88f, 126f * density, paint)
+            textPaint.textAlign = Paint.Align.CENTER
+            textPaint.textSize = 13f * density; textPaint.color = Color.WHITE
+            canvas.drawText(if (computerBattle) "GHOST BATTLE · AI OPPONENT" else "RACE YOUR PERSONAL BEST", worldWidth * .5f, 113f * density, textPaint)
+            textPaint.textAlign = Paint.Align.LEFT
+        }
         if (state == State.PLAYING && world3D.landings < 3) {
             textPaint.textAlign = Paint.Align.CENTER
             textPaint.textSize = 12f * density
@@ -1171,6 +1287,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun drawMainMenu(canvas: Canvas) {
+        refreshAchievementIndicator()
         textPaint.textAlign = Paint.Align.CENTER
         textPaint.color = Color.rgb(224, 225, 228)
         textPaint.textSize = min(50f * density, worldWidth / 8.2f)
@@ -1190,6 +1307,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         val firstTop = screenHeight * 0.305f
         repeat(labels.size) { index ->
             val top = firstTop + index * (buttonHeight + gap)
+            canvas.save()
+            if (index == 3 && hasAchievementRewards) {
+                // A brief, gentle wiggle every four seconds; hit targets stay fixed.
+                val phase = elapsed % 4f
+                if (phase < .7f) {
+                    val envelope = sin(phase / .7f * Math.PI).toFloat()
+                    canvas.rotate(sin(phase * 27f) * .9f * envelope,
+                        worldWidth * .5f, top + buttonHeight * .5f)
+                }
+            }
             paint.color = Color.argb(185, 0, 0, 0)
             canvas.drawRect(left + 4f * density, top + 6f * density, right + 4f * density, top + buttonHeight + 6f * density, paint)
             paint.color = if (index == 0) Color.rgb(235, 63, 88) else Color.WHITE
@@ -1223,6 +1350,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 textPaint.color = Color.BLACK
                 canvas.drawText("›", right - 16f * density, top + 31f * density, textPaint)
             }
+            canvas.restore()
         }
         drawDailyMissions(canvas)
         textPaint.textAlign = Paint.Align.LEFT
@@ -1230,61 +1358,61 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun drawReferenceModeSelect(canvas: Canvas) {
         val oldTypeface = textPaint.typeface
-        val ink = Color.rgb(36, 27, 22)
-        val bone = Color.rgb(244, 236, 220)
-        val boneDeep = Color.rgb(188, 171, 138)
-        val sun = Color.rgb(245, 191, 85)
+        val u = worldWidth / 390f
+        val ink = Color.rgb(29, 18, 14)
+        val bone = Color.rgb(241, 228, 204)
+        val boneDeep = Color.rgb(184, 160, 122)
+        val sun = Color.rgb(242, 184, 75)
 
         if (modeBackdropHeight != screenHeight) {
             modeBackdropPaint.shader = LinearGradient(0f, 0f, 0f, screenHeight,
-                intArrayOf(Color.rgb(29, 21, 17), Color.rgb(58, 28, 22),
-                    Color.rgb(91, 42, 32), Color.rgb(196, 84, 58), Color.rgb(235, 154, 85)),
-                floatArrayOf(0f, .30f, .52f, .78f, 1f), Shader.TileMode.CLAMP)
+                intArrayOf(Color.rgb(25, 14, 10), Color.rgb(51, 25, 15),
+                    Color.rgb(142, 61, 39), Color.rgb(210, 105, 58)),
+                floatArrayOf(0f, .38f, .72f, 1f), Shader.TileMode.CLAMP)
             modeBackdropHeight = screenHeight
         }
         canvas.drawRect(0f, 0f, worldWidth, screenHeight, modeBackdropPaint)
 
         val sunX = worldWidth * .5f
-        val sunY = screenHeight + 20f * density
-        paint.color = Color.rgb(232, 150, 60)
-        canvas.drawCircle(sunX, sunY, 170f * density, paint)
+        val sunY = screenHeight - 85f * u
+        paint.color = Color.rgb(233, 149, 58)
+        paint.alpha = 115
+        canvas.drawCircle(sunX, sunY, 150f * u, paint)
+        paint.alpha = 255
         paint.color = sun
-        canvas.drawCircle(sunX, sunY - 10f * density, 142f * density, paint)
+        canvas.drawCircle(sunX, sunY, 112f * u, paint)
         paint.color = Color.rgb(251, 216, 131)
-        canvas.drawCircle(sunX, sunY - 31f * density, 98f * density, paint)
-        drawReferenceModeRidges(canvas)
+        canvas.drawCircle(sunX, sunY, 70f * u, paint)
+        drawReferenceModeRidges(canvas, u)
 
-        val backLeft = 18f * density
-        val backTop = 18f * density
-        val backSize = 44f * density
-        paint.color = Color.argb(95, 0, 0, 0)
-        canvas.drawRoundRect(backLeft, backTop + 10f * density, backLeft + backSize,
-            backTop + backSize + 16f * density, 14f * density, 14f * density, paint)
+        val backLeft = 20f * u
+        val backTop = 30f * u
+        val backSize = 46f * u
         paint.color = boneDeep
-        canvas.drawRoundRect(backLeft, backTop + 4f * density, backLeft + backSize,
-            backTop + backSize + 4f * density, 14f * density, 14f * density, paint)
+        canvas.drawRoundRect(backLeft, backTop + 4f * u, backLeft + backSize,
+            backTop + backSize + 4f * u, 14f * u, 14f * u, paint)
         paint.color = bone
         canvas.drawRoundRect(backLeft, backTop, backLeft + backSize, backTop + backSize,
-            14f * density, 14f * density, paint)
+            14f * u, 14f * u, paint)
         paint.color = ink
         paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 2.5f * density
+        paint.strokeWidth = 2.6f * u
         paint.strokeCap = Paint.Cap.ROUND
         paint.strokeJoin = Paint.Join.ROUND
-        canvas.drawLine(45f * density, 29f * density, 34f * density, 40f * density, paint)
-        canvas.drawLine(34f * density, 40f * density, 45f * density, 51f * density, paint)
+        canvas.drawLine(47f * u, 41f * u, 36f * u, 53f * u, paint)
+        canvas.drawLine(36f * u, 53f * u, 47f * u, 65f * u, paint)
         paint.style = Paint.Style.FILL
         paint.strokeCap = Paint.Cap.BUTT
 
-        textPaint.typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.BOLD)
+        textPaint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
         textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = 29f * density
+        textPaint.textSize = 29f * u
         textPaint.color = bone
-        canvas.drawText("Choose your run", 76f * density, 43f * density, textPaint)
-        textPaint.typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL)
-        textPaint.textSize = 12f * density
-        textPaint.color = Color.argb(175, 244, 236, 220)
-        canvas.drawText("Two ways up.", 77f * density, 61f * density, textPaint)
+        canvas.drawText("Choose your run", 80f * u, 54f * u, textPaint)
+        textPaint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+        textPaint.textSize = 13f * u
+        textPaint.color = Color.rgb(226, 195, 163)
+        canvas.drawText("Two ways up.", 80f * u, 74f * u, textPaint)
 
         val level = levelForLifetimeScore(lifetimeScore)
         val from = scoreAtLevel(level)
@@ -1293,191 +1421,242 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             ((lifetimeScore - from).toFloat() / (to - from).coerceAtLeast(1L)).coerceIn(0f, 1f)
         val age = (elapsed - modeSelectStartedAt).coerceAtLeast(0f)
         val ringReveal = if (reduceMotion) 1f else ((age - .28f) / .85f).coerceIn(0f, 1f)
-        val avatarX = 64f * density
-        val avatarY = 130f * density
+        val avatarX = 58f * u
+        val avatarY = 134f * u
         paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 5f * density
+        paint.strokeWidth = 5f * u
         paint.strokeCap = Paint.Cap.ROUND
-        paint.color = Color.argb(42, 244, 236, 220)
-        canvas.drawCircle(avatarX, avatarY, 44f * density, paint)
+        paint.color = Color.rgb(75, 44, 34)
+        canvas.drawCircle(avatarX, avatarY, 32f * u, paint)
         paint.color = sun
-        canvas.drawArc(avatarX - 44f * density, avatarY - 44f * density,
-            avatarX + 44f * density, avatarY + 44f * density, -90f,
+        canvas.drawArc(avatarX - 32f * u, avatarY - 32f * u,
+            avatarX + 32f * u, avatarY + 32f * u, -90f,
             360f * levelProgress * ringReveal, false, paint)
         paint.style = Paint.Style.FILL
         paint.strokeCap = Paint.Cap.BUTT
         val drop = if (reduceMotion) 1f else (age / .72f).coerceIn(0f, 1f)
         val easedDrop = 1f - (1f - drop) * (1f - drop) * (1f - drop)
-        val avatarBallY = avatarY - (1f - easedDrop) * 60f * density -
-            sin((drop * Math.PI).toDouble()).toFloat() * 5f * density
-        drawSkinBall(canvas, avatarX, avatarBallY, 32f * density, selectedSkin)
+        val avatarBallY = avatarY - (1f - easedDrop) * 34f * u -
+            sin(drop * Math.PI).toFloat() * 3f * u
+        drawSkinBall(canvas, avatarX, avatarBallY, 25f * u, selectedSkin)
 
-        paint.color = Color.rgb(185, 133, 42)
-        canvas.drawRoundRect(75f * density, 148f * density, 110f * density, 183f * density,
-            11f * density, 11f * density, paint)
+        paint.color = Color.rgb(183, 132, 42)
+        canvas.drawRoundRect(80f * u, 153f * u, 104f * u, 177f * u,
+            8f * u, 8f * u, paint)
         paint.color = sun
-        canvas.drawRoundRect(75f * density, 145f * density, 110f * density, 177f * density,
-            11f * density, 11f * density, paint)
-        textPaint.typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.BOLD)
+        canvas.drawRoundRect(80f * u, 150f * u, 104f * u, 174f * u,
+            8f * u, 8f * u, paint)
+        textPaint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
         textPaint.textAlign = Paint.Align.CENTER
-        textPaint.textSize = 16f * density
+        textPaint.textSize = 13.5f * u
         textPaint.color = ink
-        canvas.drawText(level.toString(), 92.5f * density, 167f * density, textPaint)
+        canvas.drawText(level.toString(), 92f * u, 166f * u, textPaint)
 
-        val infoLeft = 126f * density
+        val infoLeft = 108f * u
+        val infoRight = 368f * u
         val displayTitle = titleForLevel(level).lowercase().split(' ').joinToString(" ") {
             it.replaceFirstChar { char -> char.uppercase() }
         }
         textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = 25f * density
+        textPaint.textSize = 24f * u
         textPaint.color = bone
-        canvas.drawText(displayTitle, infoLeft, 114f * density, textPaint)
-        textPaint.typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL)
-        textPaint.textSize = 12f * density
-        textPaint.color = Color.argb(180, 244, 236, 220)
-        canvas.drawText("Level $level", infoLeft, 134f * density, textPaint)
+        canvas.drawText(displayTitle, infoLeft, 123f * u, textPaint)
+        textPaint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+        textPaint.textAlign = Paint.Align.RIGHT
+        textPaint.textSize = 12.5f * u
+        textPaint.color = Color.rgb(226, 195, 163)
+        canvas.drawText("Level $level", infoRight, 122f * u, textPaint)
+        paint.color = Color.rgb(75, 44, 34)
+        canvas.drawRoundRect(infoLeft, 135f * u, infoRight, 142f * u,
+            4f * u, 4f * u, paint)
+        paint.color = sun
+        canvas.drawRoundRect(infoLeft, 135f * u,
+            infoLeft + (infoRight - infoLeft) * levelProgress, 142f * u,
+            4f * u, 4f * u, paint)
         val intoLevel = (lifetimeScore - from).coerceAtLeast(0L)
         val levelSpan = (to - from).coerceAtLeast(0L)
         val remaining = (to - lifetimeScore).coerceAtLeast(0L)
-        textPaint.typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.BOLD)
-        textPaint.textSize = 11.5f * density
+        textPaint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = 12.5f * u
         textPaint.color = bone
-        canvas.drawText("${java.text.NumberFormat.getIntegerInstance().format(intoLevel)} of ${java.text.NumberFormat.getIntegerInstance().format(levelSpan)} EXP",
-            infoLeft, 157f * density, textPaint)
-        textPaint.typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL)
-        textPaint.textSize = 10.5f * density
-        textPaint.color = Color.argb(180, 244, 236, 220)
-        canvas.drawText(if (level >= MAX_ACCOUNT_LEVEL) "Maximum level reached"
+        canvas.drawText("${java.text.NumberFormat.getIntegerInstance().format(intoLevel)} / ${java.text.NumberFormat.getIntegerInstance().format(levelSpan)} EXP",
+            infoLeft, 162f * u, textPaint)
+        textPaint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+        textPaint.textAlign = Paint.Align.RIGHT
+        textPaint.color = Color.rgb(226, 195, 163)
+        canvas.drawText(if (level >= MAX_ACCOUNT_LEVEL) "Maximum level"
             else "${java.text.NumberFormat.getIntegerInstance().format(remaining)} to level ${level + 1}",
-            infoLeft, 174f * density, textPaint)
+            infoRight, 162f * u, textPaint)
 
-        drawReferenceModeCard(canvas, GameMode.ENDLESS, 196f * density, 150f * density,
-            "Endless run", "Climb until you fall. No clock, no ceiling,", "only how high you can go.", highScore)
-        drawReferenceModeCard(canvas, GameMode.TIME_TRIAL, 356f * density, 150f * density,
-            "Time trial", "Race the clock. Find +5 second tokens and", "climb as far as possible.", timeTrialBest)
+        drawReferenceModeCard(canvas, GameMode.ENDLESS, 192f * u, 142f * u,
+            "Endless run", "Climb until you fall. No clock,", "no ceiling.", highScore)
+        drawReferenceModeCard(canvas, GameMode.TIME_TRIAL, 356f * u, 142f * u,
+            "Time trial", "Race the clock. Grab +5 second", "tokens and climb.", timeTrialBest)
+        drawReferenceModeCard(canvas, GameMode.ENDLESS, 520f * u, 142f * u,
+            "Ghost battle", "Outclimb a computer opponent.", "Same course. No collisions.", highScore, true)
 
         textPaint.typeface = oldTypeface
         textPaint.textAlign = Paint.Align.LEFT
     }
 
-    private fun drawReferenceModeRidges(canvas: Canvas) {
+    private fun drawReferenceModeRidges(canvas: Canvas, u: Float) {
         val base = screenHeight
         spikePath.reset()
-        spikePath.moveTo(0f, base - 54f * density)
-        spikePath.lineTo(worldWidth * .15f, base - 98f * density)
-        spikePath.lineTo(worldWidth * .27f, base - 62f * density)
-        spikePath.lineTo(worldWidth * .41f, base - 116f * density)
-        spikePath.lineTo(worldWidth * .56f, base - 58f * density)
-        spikePath.lineTo(worldWidth * .71f, base - 102f * density)
-        spikePath.lineTo(worldWidth * .85f, base - 66f * density)
-        spikePath.lineTo(worldWidth, base - 106f * density)
+        spikePath.moveTo(0f, base - 64f * u)
+        spikePath.lineTo(66f * u, base - 124f * u)
+        spikePath.lineTo(118f * u, base - 86f * u)
+        spikePath.lineTo(198f * u, base - 158f * u)
+        spikePath.lineTo(286f * u, base - 82f * u)
+        spikePath.lineTo(338f * u, base - 114f * u)
+        spikePath.lineTo(worldWidth, base - 72f * u)
         spikePath.lineTo(worldWidth, base)
         spikePath.lineTo(0f, base)
         spikePath.close()
-        paint.color = Color.rgb(106, 44, 31)
+        paint.color = Color.rgb(106, 43, 30)
         canvas.drawPath(spikePath, paint)
 
         spikePath.reset()
-        spikePath.moveTo(0f, base - 28f * density)
-        spikePath.lineTo(worldWidth * .19f, base - 66f * density)
-        spikePath.lineTo(worldWidth * .34f, base - 34f * density)
-        spikePath.lineTo(worldWidth * .50f, base - 76f * density)
-        spikePath.lineTo(worldWidth * .68f, base - 32f * density)
-        spikePath.lineTo(worldWidth * .84f, base - 62f * density)
-        spikePath.lineTo(worldWidth, base - 30f * density)
+        spikePath.moveTo(0f, base - 38f * u)
+        spikePath.lineTo(92f * u, base - 82f * u)
+        spikePath.lineTo(170f * u, base - 42f * u)
+        spikePath.lineTo(250f * u, base - 92f * u)
+        spikePath.lineTo(330f * u, base - 48f * u)
+        spikePath.lineTo(worldWidth, base - 68f * u)
         spikePath.lineTo(worldWidth, base)
         spikePath.lineTo(0f, base)
         spikePath.close()
-        paint.color = Color.rgb(63, 28, 21)
+        paint.color = Color.rgb(74, 29, 20)
         canvas.drawPath(spikePath, paint)
 
         spikePath.reset()
-        spikePath.moveTo(0f, base - 10f * density)
-        spikePath.lineTo(worldWidth * .25f, base - 32f * density)
-        spikePath.lineTo(worldWidth * .5f, base - 12f * density)
-        spikePath.lineTo(worldWidth * .75f, base - 30f * density)
-        spikePath.lineTo(worldWidth, base - 12f * density)
+        spikePath.moveTo(0f, base - 12f * u)
+        spikePath.lineTo(120f * u, base - 34f * u)
+        spikePath.lineTo(240f * u, base - 16f * u)
+        spikePath.lineTo(worldWidth, base - 38f * u)
         spikePath.lineTo(worldWidth, base)
         spikePath.lineTo(0f, base)
         spikePath.close()
-        paint.color = Color.rgb(36, 20, 16)
+        paint.color = Color.rgb(37, 16, 11)
         canvas.drawPath(spikePath, paint)
     }
 
     private fun drawReferenceModeCard(canvas: Canvas, mode: GameMode, top: Float, height: Float,
-                                      title: String, description1: String, description2: String, best: Int) {
-        val ink = Color.rgb(36, 27, 22)
-        val bone = Color.rgb(244, 236, 220)
-        val boneDeep = Color.rgb(188, 171, 138)
-        val ember = Color.rgb(228, 69, 47)
-        val sun = Color.rgb(245, 191, 85)
-        val left = 18f * density
-        val right = worldWidth - 18f * density
+                                      title: String, description1: String, description2: String, best: Int, battle: Boolean = false) {
+        val u = worldWidth / 390f
+        val ink = Color.rgb(29, 18, 14)
+        val bone = Color.rgb(241, 228, 204)
+        val boneDeep = Color.rgb(184, 160, 122)
+        val ember = Color.rgb(199, 62, 29)
+        val sun = Color.rgb(242, 184, 75)
+        val left = 20f * u
+        val right = worldWidth - 20f * u
         val bottom = top + height
-        paint.color = Color.argb(95, 30, 8, 4)
-        canvas.drawRoundRect(left, top + 13f * density, right, bottom + 13f * density,
-            18f * density, 18f * density, paint)
+        paint.color = Color.argb(90, 0, 0, 0)
+        canvas.drawRoundRect(left, top + 13f * u, right, bottom + 18f * u,
+            22f * u, 22f * u, paint)
         paint.color = boneDeep
-        canvas.drawRoundRect(left, top + 5f * density, right, bottom + 5f * density,
-            18f * density, 18f * density, paint)
+        canvas.drawRoundRect(left, top + 5f * u, right, bottom + 5f * u,
+            22f * u, 22f * u, paint)
         paint.color = bone
-        canvas.drawRoundRect(left, top, right, bottom, 18f * density, 18f * density, paint)
+        canvas.drawRoundRect(left, top, right, bottom, 22f * u, 22f * u, paint)
 
-        val contentLeft = left + 16f * density
-        textPaint.typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.BOLD)
-        textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = 20f * density
-        textPaint.color = ink
-        canvas.drawText(title, contentLeft, top + 31f * density, textPaint)
-        textPaint.typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL)
-        textPaint.textSize = 10.5f * density
-        textPaint.color = Color.argb(214, 36, 27, 22)
-        canvas.drawText(description1, contentLeft, top + 51f * density, textPaint)
-        canvas.drawText(description2, contentLeft, top + 66f * density, textPaint)
-
+        val iconLeft = left + 14f * u
+        val iconTop = top + 14f * u
+        paint.color = Color.rgb(42, 24, 18)
+        canvas.drawRoundRect(iconLeft, iconTop, iconLeft + 60f * u, iconTop + 60f * u,
+            16f * u, 16f * u, paint)
         if (mode == GameMode.ENDLESS) {
-            drawReferenceEndlessScene(canvas, right - 53f * density, top + 45f * density, ink)
+            drawReferenceEndlessScene(canvas, iconLeft, iconTop, u)
         } else {
-            drawReferenceTrialScene(canvas, right - 52f * density, top + 45f * density, ink, ember, sun)
+            drawReferenceTrialScene(canvas, iconLeft, iconTop, ink, ember, sun, u)
         }
 
-        paint.color = Color.argb(38, 36, 27, 22)
-        canvas.drawRect(contentLeft, top + 92f * density, right - 14f * density,
-            top + 93f * density, paint)
-        textPaint.typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.BOLD)
+        val contentLeft = iconLeft + 72f * u
+        textPaint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
         textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = 8.5f * density
-        textPaint.color = Color.argb(175, 36, 27, 22)
-        canvas.drawText("BEST", contentLeft, top + 111f * density, textPaint)
-        textPaint.textSize = 19f * density
+        textPaint.textSize = 22f * u
         textPaint.color = ink
-        canvas.drawText(java.text.NumberFormat.getIntegerInstance().format(best), contentLeft,
-            top + 134f * density, textPaint)
+        canvas.drawText(title, contentLeft, top + 33f * u, textPaint)
+        textPaint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+        textPaint.textSize = 12.5f * u
+        textPaint.color = Color.rgb(90, 70, 59)
+        canvas.drawText(description1, contentLeft, top + 52f * u, textPaint)
+        canvas.drawText(description2, contentLeft, top + 69f * u, textPaint)
 
-        val soloLeft = right - 166f * density
-        val soloRight = right - 92f * density
-        val onlineLeft = right - 86f * density
-        val onlineRight = right - 14f * density
-        val playTop = top + 105f * density
+        textPaint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+        textPaint.textAlign = Paint.Align.RIGHT
+        textPaint.textSize = 10.5f * u
+        textPaint.color = Color.rgb(107, 86, 72)
+        canvas.drawText("BEST", right - 14f * u, top + 25f * u, textPaint)
+        textPaint.textSize = 25f * u
+        textPaint.color = ink
+        canvas.drawText(java.text.NumberFormat.getIntegerInstance().format(best), right - 14f * u,
+            top + 51f * u, textPaint)
+
+        val soloLeft = left + 24f * u
+        val soloRight = worldWidth * .5f - 4f * u
+        val onlineLeft = worldWidth * .5f + 4f * u
+        val onlineRight = right - 24f * u
+        val playTop = top + 90f * u
+        if (battle) {
+            paint.color = Color.BLACK
+            canvas.drawRect(soloLeft, playTop + 3f * u, onlineRight, playTop + 37f * u, paint)
+            paint.color = ember
+            canvas.drawRect(soloLeft, playTop, onlineRight, playTop + 34f * u, paint)
+            textPaint.textAlign = Paint.Align.CENTER
+            textPaint.textSize = 14f * u; textPaint.color = Color.WHITE
+            canvas.drawText("BATTLE AI", worldWidth * .5f, playTop + 22f * u, textPaint)
+            return
+        }
         paint.color = Color.BLACK
-        canvas.drawRoundRect(soloLeft, playTop + 3f * density, soloRight,
-            playTop + 37f * density, 11f * density, 11f * density, paint)
+        canvas.drawRoundRect(soloLeft, playTop + 3f * u, soloRight,
+            playTop + 37f * u, 0f, 0f, paint)
         paint.color = ink
         canvas.drawRoundRect(soloLeft, playTop, soloRight,
-            playTop + 34f * density, 11f * density, 11f * density, paint)
-        paint.color = Color.rgb(133, 44, 29)
-        canvas.drawRoundRect(onlineLeft, playTop + 3f * density, onlineRight,
-            playTop + 37f * density, 11f * density, 11f * density, paint)
+            playTop + 34f * u, 0f, 0f, paint)
+        paint.color = Color.rgb(122, 36, 16)
+        canvas.drawRoundRect(onlineLeft, playTop + 3f * u, onlineRight,
+            playTop + 37f * u, 0f, 0f, paint)
         paint.color = ember
         canvas.drawRoundRect(onlineLeft, playTop, onlineRight,
-            playTop + 34f * density, 11f * density, 11f * density, paint)
+            playTop + 34f * u, 0f, 0f, paint)
+
+        val soloCenter = (soloLeft + soloRight) * .5f
+        val onlineCenter = (onlineLeft + onlineRight) * .5f
+        drawReferenceModeButtonIcon(canvas, soloCenter - 28f * u, playTop + 17f * u, false, bone, u)
+        drawReferenceModeButtonIcon(canvas, onlineCenter - 34f * u, playTop + 17f * u, true, Color.WHITE, u)
         textPaint.textAlign = Paint.Align.CENTER
-        textPaint.textSize = 11f * density
+        textPaint.textSize = 14f * u
         textPaint.color = bone
-        canvas.drawText("SOLO", (soloLeft + soloRight) * .5f,
-            playTop + 22.5f * density, textPaint)
-        canvas.drawText("ONLINE", (onlineLeft + onlineRight) * .5f,
-            playTop + 23f * density, textPaint)
+        canvas.drawText("SOLO", soloCenter + 8f * u, playTop + 22f * u, textPaint)
+        textPaint.color = Color.WHITE
+        canvas.drawText("ONLINE", onlineCenter + 9f * u, playTop + 22f * u, textPaint)
+    }
+
+    private fun drawReferenceModeButtonIcon(canvas: Canvas, cx: Float, cy: Float, online: Boolean,
+                                            color: Int, u: Float) {
+        paint.color = color
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 2f * u
+        paint.strokeCap = Paint.Cap.ROUND
+        if (online) {
+            canvas.drawCircle(cx, cy, 2f * u, paint)
+            canvas.drawArc(cx - 7f * u, cy - 7f * u, cx + 7f * u, cy + 7f * u,
+                126f, 108f, false, paint)
+            canvas.drawArc(cx - 11f * u, cy - 11f * u, cx + 11f * u, cy + 11f * u,
+                126f, 108f, false, paint)
+            canvas.drawArc(cx - 7f * u, cy - 7f * u, cx + 7f * u, cy + 7f * u,
+                -54f, 108f, false, paint)
+            canvas.drawArc(cx - 11f * u, cy - 11f * u, cx + 11f * u, cy + 11f * u,
+                -54f, 108f, false, paint)
+        } else {
+            canvas.drawCircle(cx, cy - 5f * u, 4f * u, paint)
+            canvas.drawArc(cx - 8f * u, cy + 1f * u, cx + 8f * u, cy + 13f * u,
+                198f, 144f, false, paint)
+        }
+        paint.style = Paint.Style.FILL
+        paint.strokeCap = Paint.Cap.BUTT
     }
 
     private fun drawMatchmakingOverlay(canvas: Canvas) {
@@ -1533,99 +1712,57 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         textPaint.textAlign = Paint.Align.LEFT
     }
 
-    private fun drawReferenceEndlessScene(canvas: Canvas, cx: Float, cy: Float, ink: Int) {
-        // A compact perspective path: each slab has a lit top, a deep front face
-        // and a right side, matching the dimensional blocks used in gameplay.
-        drawReferenceMiniBlock(canvas, cx - 15f * density, cy + 27f * density,
-            38f * density, ink, 1f)
-        drawReferenceMiniBlock(canvas, cx + 10f * density, cy + 2f * density,
-            32f * density, ink, .84f)
-        drawReferenceMiniBlock(canvas, cx - 13f * density, cy - 23f * density,
-            27f * density, ink, .66f)
+    private fun drawReferenceEndlessScene(canvas: Canvas, left: Float, top: Float, u: Float) {
+        paint.color = Color.rgb(140, 117, 102)
+        canvas.drawRoundRect(left + 9f * u, top + 12f * u, left + 35f * u,
+            top + 18f * u, 2f * u, 2f * u, paint)
+        paint.color = Color.rgb(180, 154, 135)
+        canvas.drawRoundRect(left + 26f * u, top + 30f * u, left + 52f * u,
+            top + 36f * u, 2f * u, 2f * u, paint)
+        paint.color = Color.rgb(107, 85, 70)
+        canvas.drawRoundRect(left + 8f * u, top + 46f * u, left + 32f * u,
+            top + 52f * u, 2f * u, 2f * u, paint)
 
-        paint.color = Color.argb(120, 36, 27, 22)
-        for (dot in 0..6) {
-            val t = dot / 6f
-            val x = cx - 2f * density + sin((t * Math.PI * 2).toDouble()).toFloat() * 12f * density
-            val y = cy + 19f * density - t * 39f * density
-            canvas.drawCircle(x, y, .85f * density, paint)
-        }
-        // Small contact shadow anchors the ball above the middle slab.
-        paint.color = Color.argb(70, 0, 0, 0)
-        canvas.drawOval(cx + 1f * density, cy - 3f * density,
-            cx + 15f * density, cy + 1f * density, paint)
-        drawSkinBall(canvas, cx + 8f * density, cy - 10f * density,
-            6.5f * density, selectedSkin)
+        paint.shader = RadialGradient(left + 38f * u, top + 19f * u, 12f * u,
+            intArrayOf(Color.rgb(217, 210, 203), Color.rgb(46, 41, 39), Color.rgb(14, 11, 10)),
+            floatArrayOf(0f, .7f, 1f), Shader.TileMode.CLAMP)
+        canvas.drawCircle(left + 40f * u, top + 21f * u, 6f * u, paint)
+        paint.shader = null
     }
 
-    private fun drawReferenceMiniBlock(canvas: Canvas, centerX: Float, topY: Float,
-                                       width: Float, ink: Int, alpha: Float) {
-        val half = width * .5f
-        val skew = 5f * density
-        val topDepth = 5f * density
-        val thickness = 6f * density
-        val a = (255f * alpha).toInt().coerceIn(0, 255)
-
-        // Front face.
-        spikePath.reset()
-        spikePath.moveTo(centerX - half, topY)
-        spikePath.lineTo(centerX + half, topY)
-        spikePath.lineTo(centerX + half, topY + thickness)
-        spikePath.lineTo(centerX - half, topY + thickness)
-        spikePath.close()
-        paint.color = Color.argb(a, Color.red(ink), Color.green(ink), Color.blue(ink))
-        canvas.drawPath(spikePath, paint)
-
-        // Top face catches the light and establishes depth.
-        spikePath.reset()
-        spikePath.moveTo(centerX - half, topY)
-        spikePath.lineTo(centerX - half + skew, topY - topDepth)
-        spikePath.lineTo(centerX + half + skew, topY - topDepth)
-        spikePath.lineTo(centerX + half, topY)
-        spikePath.close()
-        paint.color = Color.argb(a, 91, 77, 67)
-        canvas.drawPath(spikePath, paint)
-
-        // Right wall completes the solid slab silhouette.
-        spikePath.reset()
-        spikePath.moveTo(centerX + half, topY)
-        spikePath.lineTo(centerX + half + skew, topY - topDepth)
-        spikePath.lineTo(centerX + half + skew, topY + thickness - topDepth)
-        spikePath.lineTo(centerX + half, topY + thickness)
-        spikePath.close()
-        paint.color = Color.argb(a, 18, 13, 10)
-        canvas.drawPath(spikePath, paint)
-    }
-
-    private fun drawReferenceTrialScene(canvas: Canvas, cx: Float, cy: Float, ink: Int,
-                                        ember: Int, sun: Int) {
+    private fun drawReferenceTrialScene(canvas: Canvas, left: Float, top: Float, ink: Int,
+                                        ember: Int, sun: Int, u: Float) {
+        val cx = left + 30f * u
+        val cy = top + 31f * u
         paint.style = Paint.Style.STROKE
         paint.strokeCap = Paint.Cap.ROUND
-        paint.strokeWidth = 6f * density
-        paint.color = Color.argb(32, 36, 27, 22)
-        canvas.drawCircle(cx, cy + 4f * density, 28f * density, paint)
+        paint.strokeWidth = 5f * u
+        paint.color = Color.rgb(90, 59, 46)
+        canvas.drawCircle(cx, cy, 17f * u, paint)
         paint.color = ember
-        canvas.drawArc(cx - 28f * density, cy - 24f * density, cx + 28f * density,
-            cy + 32f * density, -90f, 250f, false, paint)
-        paint.strokeWidth = 2.5f * density
-        paint.color = ink
-        canvas.drawLine(cx, cy + 4f * density, cx, cy - 15f * density, paint)
-        canvas.drawLine(cx, cy + 4f * density, cx + 13f * density, cy + 11f * density, paint)
+        canvas.drawArc(cx - 17f * u, cy - 17f * u, cx + 17f * u, cy + 17f * u,
+            -90f, 255f, false, paint)
+        paint.strokeWidth = 3f * u
+        paint.color = Color.rgb(246, 233, 211)
+        canvas.drawLine(cx, cy, cx, cy - 9f * u, paint)
+        canvas.drawLine(cx, cy, cx + 6f * u, cy + 4f * u, paint)
         paint.style = Paint.Style.FILL
         paint.strokeCap = Paint.Cap.BUTT
-        canvas.drawCircle(cx, cy + 4f * density, 3.5f * density, paint)
+
+        paint.color = Color.rgb(183, 132, 42)
+        canvas.drawCircle(left + 53f * u, top - 5f * u, 12f * u, paint)
         paint.color = sun
-        canvas.drawCircle(cx + 29f * density, cy - 29f * density, 13f * density, paint)
+        canvas.drawCircle(left + 53f * u, top - 7f * u, 12f * u, paint)
         paint.color = ink
         paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 1.8f * density
-        canvas.drawCircle(cx + 29f * density, cy - 29f * density, 13f * density, paint)
+        paint.strokeWidth = 1.4f * u
+        canvas.drawCircle(left + 53f * u, top - 7f * u, 12f * u, paint)
         paint.style = Paint.Style.FILL
         textPaint.typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.BOLD)
         textPaint.textAlign = Paint.Align.CENTER
-        textPaint.textSize = 10f * density
+        textPaint.textSize = 11f * u
         textPaint.color = ink
-        canvas.drawText("+5", cx + 29f * density, cy - 25f * density, textPaint)
+        canvas.drawText("+5", left + 53f * u, top - 3f * u, textPaint)
     }
 
     private fun drawModeSelect(canvas: Canvas) {
@@ -1800,70 +1937,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         skinPath.fillType = Path.FillType.WINDING
     }
 
+    private val friendsPanel = FriendsPanel()
     private fun drawFriendsLeaderboard(canvas: Canvas) {
-        paint.color = Color.argb(170, 12, 12, 10)
-        canvas.drawRect(0f, 0f, worldWidth, screenHeight, paint)
-        val side = 24f * density
-        textPaint.textAlign = Paint.Align.LEFT; textPaint.color = Color.WHITE; textPaint.textSize = 30f * density
-        canvas.drawText("‹", side, 52f * density, textPaint)
-        textPaint.textAlign = Paint.Align.CENTER; textPaint.textSize = 24f * density
-        canvas.drawText("LEADERBOARD", worldWidth * .5f, 54f * density, textPaint)
-        textPaint.textSize = 11f * density; textPaint.color = Color.rgb(190, 188, 181)
-        canvas.drawText("VERIFIED RUNS · FAIR COMPETITION", worldWidth * .5f, 75f * density, textPaint)
-
-        val tabLeft = side; val tabRight = worldWidth - side; val tabTop = 92f * density
-        paint.color = Color.rgb(245, 242, 233)
-        canvas.drawRoundRect(tabLeft, tabTop, tabRight, tabTop + 44f * density,
-            11f * density, 11f * density, paint)
-        val activeLeft = if (leaderboardTab == 0) tabLeft + 4f * density else worldWidth * .5f
-        val activeRight = if (leaderboardTab == 0) worldWidth * .5f else tabRight - 4f * density
-        paint.color = Color.rgb(225, 82, 63)
-        canvas.drawRoundRect(activeLeft, tabTop + 4f * density, activeRight,
-            tabTop + 40f * density, 8f * density, 8f * density, paint)
-        textPaint.textSize = 12f * density
-        textPaint.color = if (leaderboardTab == 0) Color.WHITE else Color.rgb(40, 38, 34)
-        canvas.drawText("FRIENDS", (tabLeft + worldWidth * .5f) * .5f, tabTop + 29f * density, textPaint)
-        textPaint.color = if (leaderboardTab == 1) Color.WHITE else Color.rgb(40, 38, 34)
-        canvas.drawText("GLOBAL", (worldWidth * .5f + tabRight) * .5f, tabTop + 29f * density, textPaint)
-
-        val level = levelForLifetimeScore(lifetimeScore)
-        val left = side; val right = worldWidth - side
-        paint.color = Color.rgb(249, 247, 240)
-        canvas.drawRoundRect(left, 154f * density, right, 242f * density, 16f * density, 16f * density, paint)
-        paint.color = Color.rgb(225, 82, 63)
-        canvas.drawCircle(left + 42f * density, 198f * density, 23f * density, paint)
-        textPaint.textAlign = Paint.Align.CENTER; textPaint.color = Color.WHITE; textPaint.textSize = 14f * density
-        canvas.drawText(level.toString(), left + 42f * density, 204f * density, textPaint)
-        textPaint.textAlign = Paint.Align.LEFT; textPaint.color = Color.rgb(28, 27, 24); textPaint.textSize = 16f * density
-        canvas.drawText("YOU", left + 78f * density, 190f * density, textPaint)
-        textPaint.textSize = 11f * density; textPaint.color = Color.rgb(103, 97, 87)
-        canvas.drawText(titleForLevel(level), left + 78f * density, 211f * density, textPaint)
-        textPaint.textAlign = Paint.Align.RIGHT; textPaint.textSize = 15f * density; textPaint.color = Color.rgb(28, 27, 24)
-        canvas.drawText(java.text.NumberFormat.getIntegerInstance().format(highScore), right - 18f * density,
-            190f * density, textPaint)
-        textPaint.textSize = 10f * density; textPaint.color = Color.rgb(103, 97, 87)
-        canvas.drawText("ENDLESS BEST", right - 18f * density, 211f * density, textPaint)
-
-        paint.color = Color.rgb(248, 246, 239)
-        canvas.drawRoundRect(left, 264f * density, right, 446f * density, 16f * density, 16f * density, paint)
-        textPaint.textAlign = Paint.Align.CENTER; textPaint.textSize = 18f * density; textPaint.color = Color.rgb(29, 28, 25)
-        canvas.drawText(if (leaderboardTab == 0) "YOUR FRIENDS, YOUR RIVALRY" else "THE WORLD AWAITS",
-            worldWidth * .5f, 309f * density, textPaint)
-        textPaint.textSize = 12f * density; textPaint.color = Color.rgb(103, 97, 87)
-        canvas.drawText(if (leaderboardTab == 0) "Compare verified runs with your Play Games friends."
-            else "Compare your best climb with every ranked player.", worldWidth * .5f, 338f * density, textPaint)
-        canvas.drawText(if (leaderboardTab == 0) "Only people you connect with will appear here."
-            else "Separate Endless and Time Trial rankings stay fair.", worldWidth * .5f, 358f * density, textPaint)
-        paint.color = Color.rgb(225, 82, 63)
-        canvas.drawRoundRect(left + 22f * density, 382f * density, right - 22f * density,
-            428f * density, 9f * density, 9f * density, paint)
-        textPaint.textSize = 12f * density; textPaint.color = Color.WHITE
-        canvas.drawText("CONNECT GOOGLE PLAY GAMES", worldWidth * .5f, 411f * density, textPaint)
-
-        textPaint.textSize = 10f * density; textPaint.color = Color.rgb(183, 181, 175)
-        canvas.drawText(if (leaderboardTab == 0) "Friend data stays private until you choose to connect."
-            else "Global rankings use verified, signed-in scores only.", worldWidth * .5f,
-            474f * density, textPaint)
+        friendsPanel.draw(canvas, worldWidth, screenHeight, leaderboardTab, highScore)
     }
 
     private fun drawHomeMenuIcon(canvas: Canvas, index: Int, cx: Float, cy: Float) {
@@ -2749,7 +2825,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private val settingsMuted get() = if (darkTheme) Color.rgb(171, 172, 175) else Color.rgb(115, 112, 107)
     private val settingsSurface get() = if (darkTheme) Color.rgb(40, 42, 47) else Color.rgb(252, 252, 251)
     private val settingsBackground get() = if (darkTheme) Color.rgb(24, 26, 30) else Color.rgb(243, 241, 237)
-    private val settingsPageHeight get() = (if (privacyPolicyOpen) 1480f else 1140f) * density
+    private val settingsPageHeight get() = (if (privacyPolicyOpen) 1480f else 1075f) * density
 
     private fun sy(contentY: Float) = 88f * density + contentY * density - settingsScroll
 
@@ -2837,23 +2913,22 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         settingsSlider(canvas, "Button size", buttonSizeLevel, 267f,
             when { buttonSizeLevel < 35 -> "Small"; buttonSizeLevel < 70 -> "Medium"; else -> "Large" }, controlMode == 0)
 
-        drawSettingsSection(canvas, "AUDIO", 350f, 245f)
+        drawSettingsSection(canvas, "AUDIO", 350f, 180f)
         settingsSlider(canvas, "Sound effects", soundLevel, 425f, "$soundLevel%")
         settingsSlider(canvas, "Music", musicLevel, 500f, "$musicLevel%")
-        drawRow(canvas, "Vibration", 565f); drawSwitch(canvas, 557f, hapticEnabled)
 
-        drawSettingsSection(canvas, "PREFERENCES", 635f, 75f)
-        drawRow(canvas, "Dark theme", 685f); drawSwitch(canvas, 677f, darkTheme)
+        drawSettingsSection(canvas, "PREFERENCES", 570f, 75f)
+        drawRow(canvas, "Dark theme", 620f); drawSwitch(canvas, 612f, darkTheme)
 
-        drawSettingsSection(canvas, "ACCOUNT", 750f, 115f)
-        drawRow(canvas, "Sign in to sync progress", 805f, arrow = true); drawDivider(canvas, 819f)
-        drawRow(canvas, "Restore purchases", 855f, arrow = true)
+        drawSettingsSection(canvas, "ACCOUNT", 685f, 115f)
+        drawRow(canvas, "Sign in to sync progress", 740f, arrow = true); drawDivider(canvas, 754f)
+        drawRow(canvas, "Restore purchases", 790f, arrow = true)
 
-        drawSettingsSection(canvas, "ABOUT", 905f, 190f)
-        drawRow(canvas, "Language", 960f, "English", true); drawDivider(canvas, 975f)
-        drawRow(canvas, "Rate the game", 1015f, arrow = true); drawDivider(canvas, 1030f)
-        drawRow(canvas, "Privacy policy", 1070f, arrow = true)
-        settingsText(canvas, "Version 1.0.0", worldWidth / 2f, sy(1135f), 13f, settingsMuted, Paint.Align.CENTER)
+        drawSettingsSection(canvas, "ABOUT", 840f, 190f)
+        drawRow(canvas, "Language", 895f, "English", true); drawDivider(canvas, 910f)
+        drawRow(canvas, "Rate the game", 950f, arrow = true); drawDivider(canvas, 965f)
+        drawRow(canvas, "Privacy policy", 1005f, arrow = true)
+        settingsText(canvas, "Version 1.0.0", worldWidth / 2f, sy(1070f), 13f, settingsMuted, Paint.Align.CENTER)
         canvas.restore()
 
         paint.color = if (darkTheme) Color.rgb(31, 33, 38) else Color.rgb(246, 245, 242)
@@ -3076,6 +3151,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var gameOverReason = "YOU FELL TOO FAR"
 
     private fun drawGameOver(canvas: Canvas) {
+        if (isOnlineRun) {
+            drawOnlineResults(canvas)
+            return
+        }
         val startLevel = levelForLifetimeScore(lifetimeScoreAtRunStart)
         val level = levelForLifetimeScore(lifetimeScore)
         val startFrom = scoreAtLevel(startLevel)
@@ -3096,12 +3175,34 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             currentMode == GameMode.ENDLESS && !isOnlineRun)
     }
 
+    private fun drawOnlineResults(canvas: Canvas) {
+        paint.color=Color.argb(240,22,23,23)
+        canvas.drawRect(0f,0f,worldWidth,screenHeight,paint)
+        textPaint.textAlign=Paint.Align.CENTER
+        textPaint.color=Color.WHITE; textPaint.textSize=28f*density
+        val title=if(matchmakingStatus.startsWith("RIVAL LEFT")) "RIVAL DISCONNECTED" else if(!remoteDead) "WAITING FOR RIVAL" else if(score>remoteScore) "YOU WIN" else if(score<remoteScore) "RIVAL WINS" else "DRAW"
+        canvas.drawText(title,worldWidth*.5f,screenHeight*.28f,textPaint)
+        textPaint.textSize=20f*density
+        canvas.drawText("YOU  $score     RIVAL  $remoteScore",worldWidth*.5f,screenHeight*.38f,textPaint)
+        textPaint.textSize=11f*density; textPaint.color=Color.LTGRAY
+        canvas.drawText(matchmakingStatus,worldWidth*.5f,screenHeight*.46f,textPaint)
+        paint.color=if(remoteDead) Color.rgb(199,62,29) else Color.DKGRAY
+        canvas.drawRect(worldWidth*.12f,screenHeight*.55f,worldWidth*.88f,screenHeight*.64f,paint)
+        textPaint.textSize=16f*density; textPaint.color=Color.WHITE
+        canvas.drawText(if(remoteDead) "REQUEST REMATCH" else "RIVAL STILL PLAYING",worldWidth*.5f,screenHeight*.605f,textPaint)
+        paint.color=Color.rgb(60,62,62)
+        canvas.drawRect(worldWidth*.12f,screenHeight*.68f,worldWidth*.88f,screenHeight*.77f,paint)
+        canvas.drawText("EXIT TO MENU",worldWidth*.5f,screenHeight*.735f,textPaint)
+        textPaint.textAlign=Paint.Align.LEFT
+    }
+
     private fun gameOverContinueRemainingMs(): Long {
         if (gameOverStartedAtMs <= 0L) return 0L
         return (6_000L - (android.os.SystemClock.uptimeMillis() - gameOverStartedAtMs)).coerceAtLeast(0L)
     }
 
     private fun onlineCountdownRemainingMs(): Long {
+        if (replayRun != null || computerBattle) return (ghostCountdown * 1000f).toLong()
         if (onlineStartAtEpochMs <= 0L) return 0L
         val serverNow = System.currentTimeMillis() + onlineServerOffsetMs
         return (onlineStartAtEpochMs - serverNow).coerceAtLeast(0L)
@@ -3142,7 +3243,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         textPaint.textSize = 50f * density
         canvas.drawText(seconds.toString(), cx, cy + 12f * density, textPaint)
         textPaint.textSize = 14f * density
-        canvas.drawText("BOTH PLAYERS READY", cx, cy + 78f * density, textPaint)
+        canvas.drawText(if (computerBattle) "GHOST BATTLE · AI OPPONENT" else if (replayRun != null) "RACE YOUR PERSONAL BEST" else "BOTH PLAYERS READY", cx, cy + 78f * density, textPaint)
         textPaint.typeface = Typeface.create("sans", Typeface.NORMAL)
         textPaint.textSize = 10f * density
         textPaint.color = Color.rgb(124, 87, 49)
@@ -3155,15 +3256,31 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     private var menuTapY = 0f
     private var menuTapPending = false
     private var leaderboardTab = 0
+    private var friendsLastTouchY = 0f
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (isOnlineRun && state == State.GAME_OVER) {
+            if(event.actionMasked == MotionEvent.ACTION_UP) {
+                val y=event.y
+                if(y in screenHeight*.55f..screenHeight*.64f && remoteDead) onlineCoordinator.requestRematch()
+                else if(y in screenHeight*.68f..screenHeight*.77f) {
+                    onlineCoordinator.leaveRun(); isOnlineRun=false; state=State.MENU
+                }
+            }
+            return true
+        }
         if (state == State.COUNTDOWN) return true
         if (state == State.MENU || state == State.MODE_SELECT || state == State.MATCHMAKING || state == State.LEADERBOARD) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     menuTapX = event.x; menuTapY = event.y; menuTapPending = true
+                    friendsLastTouchY = event.y
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    if (state == State.LEADERBOARD) {
+                        friendsPanel.drag(friendsLastTouchY - event.y)
+                        friendsLastTouchY = event.y
+                    }
                     if (kotlin.math.abs(event.x - menuTapX) > 16f * density ||
                         kotlin.math.abs(event.y - menuTapY) > 16f * density) menuTapPending = false
                 }
@@ -3178,7 +3295,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                         post {
                             if (state == tapState) when (tapState) {
                                 State.MENU -> handleMainMenuTouch(x, y)
-                                State.MODE_SELECT -> handleModeSelectTouch(x, y)
+                                State.MODE_SELECT -> Unit
                                 State.MATCHMAKING -> handleMatchmakingTouch(x, y)
                                 State.LEADERBOARD -> handleLeaderboardTouch(x, y)
                                 else -> Unit
@@ -3275,7 +3392,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 if (gameOverContinueRemainingMs() > 0L) continueRun()
                 else playSound(ToneGenerator.TONE_PROP_NACK, 80)
             }
-            1 -> if (isOnlineRun) startOnlineMatchmaking(currentMode) else resetGame()
+            1 -> if (computerBattle) startGhostBattle() else if (isOnlineRun) showOnlineOptions(currentMode) else {
+                val previousGhost = replayRun
+                resetGame(seed = previousGhost?.seed)
+                if (previousGhost != null) {
+                    replayRun = previousGhost
+                    world3D.ghostRace = true
+                    ghostCountdown = 3f
+                    state = State.COUNTDOWN
+                    updateGhost()
+                }
+            }
             2 -> {
                 inputDirection = 0f
                 if (isOnlineRun) onlineCoordinator.leaveRun()
@@ -3317,6 +3444,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                     0 -> {
                         modeSelectStartedAt = elapsed
                         state = State.MODE_SELECT
+                        openRunSelection()
                     }
                     1 -> {
                         previewSkin = -1
@@ -3342,26 +3470,68 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         }
     }
 
+    private fun openRunSelection() {
+        val level=levelForLifetimeScore(lifetimeScore)
+        val from=scoreAtLevel(level)
+        val to=scoreAtLevel((level+1).coerceAtMost(MAX_ACCOUNT_LEVEL))
+        val earned=(lifetimeScore-from).coerceAtLeast(0L)
+        val needed=(to-from).coerceAtLeast(1L)
+        val snapshot=org.json.JSONObject().apply {
+            put("title",titleForLevel(level).lowercase().replaceFirstChar { it.uppercase() })
+            put("level",level)
+            put("exp",if(level>=MAX_ACCOUNT_LEVEL) "MAX LEVEL" else "%,d / %,d EXP".format(earned,needed))
+            put("next",if(level>=MAX_ACCOUNT_LEVEL) "Complete" else "%,d to lvl %d".format((to-lifetimeScore).coerceAtLeast(0L),level+1))
+            put("progress",if(level>=MAX_ACCOUNT_LEVEL) 1.0 else earned.toDouble()/needed)
+            put("best",org.json.JSONArray(listOf(highScore,timeTrialBest,preferences.getInt("ghost_battle_best",0))))
+        }.toString()
+        prepareRunSelection()
+        runSelectionDialog?.present(snapshot)
+    }
+
+    private var runSelectionDialog: RunSelectionDialog? = null
+    fun prepareRunSelection() {
+        if(runSelectionDialog!=null) return
+        runSelectionDialog = RunSelectionDialog(context as Activity) { index ->
+            synchronized(this) {
+                when(index) {
+                    1 -> resetGame(GameMode.ENDLESS)
+                    2 -> { state=State.MENU; showOnlineOptions(GameMode.ENDLESS) }
+                    3 -> resetGame(GameMode.TIME_TRIAL)
+                    4 -> { state=State.MENU; showOnlineOptions(GameMode.TIME_TRIAL) }
+                    5 -> startGhostBattle()
+                    else -> state=State.MENU
+                }
+            }
+        }
+    }
+    fun disposeRunSelection() { runSelectionDialog?.dispose(); runSelectionDialog=null }
+
     private fun handleModeSelectTouch(x: Float, y: Float) {
-        if (x <= 72f * density && y <= 82f * density) {
+        val u = worldWidth / 390f
+        if (x in 12f * u..76f * u && y in 20f * u..88f * u) {
             state = State.MENU
             return
         }
-        val right = worldWidth - 18f * density
-        val soloLeft = right - 166f * density
-        val soloRight = right - 92f * density
-        val onlineLeft = right - 86f * density
-        val onlineRight = right - 14f * density
-        val endlessTop = 196f * density
-        val timedTop = 356f * density
+        val cardLeft = 20f * u
+        val cardRight = worldWidth - 20f * u
+        val soloLeft = cardLeft + 24f * u
+        val soloRight = worldWidth * .5f - 4f * u
+        val onlineLeft = worldWidth * .5f + 4f * u
+        val onlineRight = cardRight - 24f * u
+        val endlessTop = 192f * u
+        val timedTop = 356f * u
+        if (y in 600f * u..656f * u && x in soloLeft..onlineRight) {
+            startGhostBattle()
+            return
+        }
         val mode = when (y) {
-            in (endlessTop + 100f * density)..(endlessTop + 146f * density) -> GameMode.ENDLESS
-            in (timedTop + 100f * density)..(timedTop + 146f * density) -> GameMode.TIME_TRIAL
+            in (endlessTop + 80f * u)..(endlessTop + 136f * u) -> GameMode.ENDLESS
+            in (timedTop + 80f * u)..(timedTop + 136f * u) -> GameMode.TIME_TRIAL
             else -> return
         }
         when (x) {
             in soloLeft..soloRight -> resetGame(mode)
-            in onlineLeft..onlineRight -> startOnlineMatchmaking(mode)
+            in onlineLeft..onlineRight -> showOnlineOptions(mode)
         }
     }
 
@@ -3390,20 +3560,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun handleLeaderboardTouch(x: Float, y: Float) {
-        if (x <= 72f * density && y <= 82f * density) {
-            state = State.MENU
-            return
-        }
-        if (y in 88f * density..145f * density) {
-            leaderboardTab = if (x < worldWidth * .5f) 0 else 1
-            playSound(ToneGenerator.TONE_PROP_BEEP, 35)
-            return
-        }
-        if (y in 370f * density..446f * density &&
-            x in 38f * density..(worldWidth - 38f * density)) {
-            Toast.makeText(context,
-                "Google Play Games sign-in activates after the Play Console leaderboard IDs are linked.",
-                Toast.LENGTH_LONG).show()
+        when (friendsPanel.action(x,y)) {
+            1 -> state = State.MENU
+            2 -> { leaderboardTab=0; friendsPanel.scroll=0f }
+            3 -> { leaderboardTab=1; friendsPanel.scroll=0f }
+            4 -> post {
+                android.app.AlertDialog.Builder(context)
+                    .setTitle(if(leaderboardTab==0) "Add a friend" else "Connect account")
+                    .setMessage("Friend requests, live online status and challenges will be available when online accounts are connected.")
+                    .setPositiveButton("Got it", null).show()
+            }
         }
     }
 
@@ -3495,17 +3661,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
                 inputDirection = 0f
                 preferences.edit().putInt("control_mode", controlMode).apply()
             }
-            cy in 535f..590f -> {
-                hapticEnabled = !hapticEnabled
-                preferences.edit().putBoolean("haptic_enabled", hapticEnabled).apply()
-                if (hapticEnabled) playHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
-            }
-            cy in 650f..710f -> { darkTheme = !darkTheme; preferences.edit().putBoolean("dark_theme", darkTheme).apply() }
-            cy in 775f..830f -> Toast.makeText(context, "Cloud sync will be available with Google Play Games.", Toast.LENGTH_SHORT).show()
-            cy in 830f..880f -> Toast.makeText(context, "There are no purchases to restore yet.", Toast.LENGTH_SHORT).show()
-            cy in 935f..985f -> Toast.makeText(context, "English is currently selected.", Toast.LENGTH_SHORT).show()
-            cy in 985f..1040f -> Toast.makeText(context, "Play Store rating becomes available after publishing.", Toast.LENGTH_SHORT).show()
-            cy in 1040f..1095f -> {
+            cy in 585f..645f -> { darkTheme = !darkTheme; preferences.edit().putBoolean("dark_theme", darkTheme).apply() }
+            cy in 710f..765f -> Toast.makeText(context, "Cloud sync will be available with Google Play Games.", Toast.LENGTH_SHORT).show()
+            cy in 765f..815f -> Toast.makeText(context, "There are no purchases to restore yet.", Toast.LENGTH_SHORT).show()
+            cy in 870f..920f -> Toast.makeText(context, "English is currently selected.", Toast.LENGTH_SHORT).show()
+            cy in 920f..975f -> Toast.makeText(context, "Play Store rating becomes available after publishing.", Toast.LENGTH_SHORT).show()
+            cy in 975f..1030f -> {
                 privacyPolicyOpen = true
                 settingsScroll = 0f
             }
@@ -3567,6 +3728,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         return when (state) {
             State.MENU -> false
             State.MODE_SELECT, State.LEADERBOARD -> {
+                runSelectionDialog?.cancelPending()
                 state = State.MENU
                 true
             }

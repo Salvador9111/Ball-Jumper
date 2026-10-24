@@ -51,6 +51,9 @@ class ClimbWorld3D(seed: Long = System.nanoTime()) {
     var cosmeticThemeTier = 0
     var trailTier = 0
     var multiplayerOpening = false
+    var ghostRace = false
+    var ghostVisible = false
+    var ghostX = 0f; var ghostY = RADIUS; var ghostZ = 0f
     var remoteVisible = false; private set
     var remoteX = 0f; private set
     var remoteY = RADIUS; private set
@@ -191,6 +194,17 @@ class ClimbWorld3D(seed: Long = System.nanoTime()) {
         val dy = next.y + RADIUS - y
         val landingTime = (launch + sqrt(max(.1f, launch * launch - 2f * gravity * dy))) / gravity
         vz = ((next.z - z) / landingTime).coerceIn(3.5f, 11f)
+    }
+
+    /** Steer toward a safe landing using the same acceleration and collision rules as a player. */
+    fun computerSteering(): Float {
+        val target = block(lastLanded + 1) ?: return 0f
+        val gravity = GRAVITY * paceMultiplier * paceMultiplier
+        val remaining = ((vy + sqrt(max(0f, vy * vy - 2f * gravity * (target.y + RADIUS - y)))) / gravity).coerceAtLeast(.08f)
+        val futureX = if (target.kind == 1) target.baseX + sin((time + remaining) * 1.25f + target.id) * .42f else target.x
+        val aim = tileCenterX(target, target.pathTile) + futureX - target.x
+        val speed = (2f + 60 * .024f) * (paceMultiplier / START_PACE).pow(2)
+        return ((aim - x - vx * .045f) * 5f / speed).coerceIn(-1f, 1f)
     }
 
     @Synchronized fun update(dt: Float, steering: Float, sensitivity: Int, recovery: Boolean) {

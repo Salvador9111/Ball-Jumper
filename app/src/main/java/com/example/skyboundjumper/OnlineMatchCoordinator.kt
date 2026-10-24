@@ -82,6 +82,47 @@ internal class OnlineMatchCoordinator(
     private var candidateMatchRef: DatabaseReference? = null
     private var session: Session? = null
     private var remoteEverSeen = false
+    private var connectionListener: ValueEventListener? = null
+    private var disconnectVersion = 0
+    private var rematchRequested = false
+    private var opponentRematch = false
+    private var rematchCreating = false
+    private var lastPublished: Map<String, Any>? = null
+    private var rivalReconnecting = false
+
+    fun requestRematch() {
+        val active = session ?: return
+        rematchRequested = true
+        root.child("matches").child(active.matchId).child("players").child(active.localUid)
+            .child("rematchRequested").setValue(true).addOnFailureListener {
+                rematchRequested = false
+                callbacks.onMatchError("REMATCH REQUEST FAILED · TRY AGAIN")
+            }
+        callbacks.onMatchStatus("REMATCH REQUESTED · WAITING FOR RIVAL")
+        createRematchIfReady()
+    }
+
+    private fun createRematchIfReady() {
+        val active = session ?: return
+        if (!rematchRequested || !opponentRematch || active.isHost || rematchCreating) return
+        rematchCreating = true
+        val token = generation
+        val nextId = root.child("matches").push().key ?: return
+        root.child("matches").child(nextId).child("meta").setValue(mapOf(
+            "hostUid" to active.opponentUid, "guestUid" to active.localUid,
+            "mode" to active.mode.key, "seed" to (System.nanoTime() and 0x7fffffffL),
+            "createdAt" to ServerValue.TIMESTAMP
+        )).addOnCompleteListener { task ->
+            if (token != generation) return@addOnCompleteListener
+            if (!task.isSuccessful) { rematchCreating=false; callbacks.onMatchError("REMATCH UNAVAILABLE"); return@addOnCompleteListener }
+            root.child("matches").child(active.matchId).child("players").child(active.localUid)
+                .child("rematchId").setValue(nextId).addOnSuccessListener {
+                    if(token==generation) openSession(token, active.localUid, active.mode, nextId)
+                }.addOnFailureListener {
+                    if(token==generation) { rematchCreating=false; callbacks.onMatchError("REMATCH REQUEST FAILED · TRY AGAIN") }
+                }
+        }
+    }
 
     fun findMatch(mode: Mode) {
         if (!firebaseAvailable) {
@@ -125,8 +166,9 @@ internal class OnlineMatchCoordinator(
             "skin" to skin.coerceIn(0, 23),
             "updatedAt" to ServerValue.TIMESTAMP
         )
+        lastPublished=values
         root.child("matches").child(active.matchId).child("players")
-            .child(active.localUid).setValue(values)
+            .child(active.localUid).updateChildren(values)
     }
 
     fun leaveRun() {
@@ -322,12 +364,32 @@ internal class OnlineMatchCoordinator(
                     createdAt + START_DELAY_MS,
                     offset
                 )
+                remoteListener?.let { remoteRef?.removeEventListener(it) }
                 session = active
+                lastPublished=null
+                rematchRequested=false; opponentRematch=false; rematchCreating=false
                 attachRemoteListener(active)
-                // A two-player match has no useful state after either participant
-                // disconnects. Removing the room also prevents abandoned match data
-                // from accumulating when Android kills an app in the background.
-                reference.onDisconnect().removeValue()
+                // Preserve the room during a transient disconnect so this player
+                // can restore their latest state when connectivity returns.
+                reference.child("players").child(uid).onDisconnect().removeValue()
+                connectionListener?.let { database.getReference(".info/connected").removeEventListener(it) }
+                connectionListener = object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        if (session?.matchId != active.matchId) return
+                        val version = ++disconnectVersion
+                        if(snapshot.getValue(Boolean::class.java)==true) {
+                            reference.child("players").child(uid).onDisconnect().removeValue()
+                            lastPublished?.let { reference.child("players").child(uid).updateChildren(it) }
+                            callbacks.onMatchStatus("CONNECTED")
+                        } else {
+                            callbacks.onMatchStatus("RECONNECTING · UP TO 15 SECONDS")
+                            handler.postDelayed({
+                                if(version==disconnectVersion && session?.matchId==active.matchId) callbacks.onMatchError("CONNECTION LOST · EXIT AND RETRY")
+                            },15000)
+                        }
+                    }
+                    override fun onCancelled(error: DatabaseError) { callbacks.onMatchError("CONNECTION STATUS UNAVAILABLE") }
+                }.also { database.getReference(".info/connected").addValueEventListener(it) }
                 callbacks.onMatchStatus("MATCH READY · GET SET")
                 callbacks.onMatchReady(active)
             }
@@ -343,9 +405,26 @@ internal class OnlineMatchCoordinator(
             override fun onDataChange(snapshot: DataSnapshot) {
                 if (session?.matchId != active.matchId) return
                 if (!snapshot.exists()) {
-                    if (remoteEverSeen) callbacks.onOpponentLeft()
+                    if (remoteEverSeen) {
+                        rivalReconnecting=true
+                        callbacks.onMatchStatus("RIVAL RECONNECTING · UP TO 15 SECONDS")
+                        handler.postDelayed({
+                            if (session?.matchId==active.matchId) reference.get().addOnSuccessListener {
+                                if(session?.matchId==active.matchId && !it.exists()) callbacks.onOpponentLeft()
+                            }
+                        },15000)
+                    }
                     return
                 }
+                if(rivalReconnecting) { rivalReconnecting=false; callbacks.onMatchStatus("CONNECTED · RIVAL RETURNED") }
+                opponentRematch = snapshot.child("rematchRequested").getValue(Boolean::class.java)==true
+                val nextId = snapshot.child("rematchId").getValue(String::class.java)
+                if(active.isHost && rematchRequested && nextId!=null && !rematchCreating) {
+                    rematchCreating=true
+                    openSession(generation,active.localUid,active.mode,nextId)
+                    return
+                }
+                createRematchIfReady()
                 remoteEverSeen = true
                 callbacks.onRemotePlayer(
                     RemotePlayer(
@@ -375,6 +454,7 @@ internal class OnlineMatchCoordinator(
     }
 
     private fun leaveInternal(removePlayer: Boolean) {
+        disconnectVersion++
         if (!firebaseAvailable) {
             queueRef = null
             remoteRef = null
@@ -385,6 +465,8 @@ internal class OnlineMatchCoordinator(
             return
         }
         queueListener?.let { listener -> queueRef?.removeEventListener(listener) }
+        connectionListener?.let { database.getReference(".info/connected").removeEventListener(it) }
+        connectionListener=null
         queueListener = null
         queueRef?.onDisconnect()?.cancel()
         val uid = auth.currentUser?.uid
@@ -402,7 +484,7 @@ internal class OnlineMatchCoordinator(
         remoteListener?.let { listener -> remoteRef?.removeEventListener(listener) }
         remoteListener = null
         remoteRef = null
-        matchRef?.onDisconnect()?.cancel()
+        if (uid != null) matchRef?.child("players")?.child(uid)?.onDisconnect()?.cancel()
         if (removePlayer && uid != null) matchRef?.removeValue()
         candidateMatchRef?.removeValue()
         candidateMatchRef = null

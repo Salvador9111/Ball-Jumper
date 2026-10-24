@@ -223,7 +223,8 @@ private class ClimbRenderer3D(private val world: ClimbWorld3D) : GLSurfaceView.R
                 }
                 val r = ClimbWorld3D.RADIUS
                 draw(sphere, world.x, world.y - r * squash, world.z, r * (1f + squash * .5f), r * (1f - squash),
-                    r * (1f + squash * .5f), world.skinColor, -world.z / r * 18f, 3f)
+                    r * (1f + squash * .5f), world.skinColor,
+                    -world.z / r * 18f, 3f)
             }
         }
         // The rival is visual-only. It shares the course and depth buffer but is
@@ -234,6 +235,16 @@ private class ClimbRenderer3D(private val world: ClimbWorld3D) : GLSurfaceView.R
             draw(sphere, world.remoteX, world.remoteY, world.remoteZ, r, r, r,
                 SKIN_BASE[world.remoteSkin.coerceIn(0, 23)],
                 -world.remoteZ / r * 18f, 3f, world.remoteSkin)
+        }
+        if (world.ghostVisible && !shadowPass) {
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA)
+            glBlendColor(0f, 0f, 0f, .90f)
+            glDepthMask(false)
+            val r = ClimbWorld3D.RADIUS
+            draw(sphere, world.ghostX, world.ghostY, world.ghostZ, r, r, r, 0xff454840.toInt())
+            glDepthMask(true)
+            glDisable(GL_BLEND)
         }
     }
 

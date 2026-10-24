@@ -33,6 +33,7 @@ class MainActivity : Activity() {
         }
         setContentView(root)
         prepareSkins()
+        gameView.prepareRunSelection()
 
         if (android.os.Build.VERSION.SDK_INT >= 30) {
             window.setDecorFitsSystemWindows(false)
@@ -156,6 +157,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        if (::gameView.isInitialized) gameView.disposeRunSelection()
         skinsView?.destroy()
         skinsView = null
         super.onDestroy()
